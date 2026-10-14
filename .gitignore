@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+data/
+ts/node_modules/
+ts/dist/
+models/*
+!models/trust_mlp.json
+!models/trust_mlp.onnx
+results/*.jsonl

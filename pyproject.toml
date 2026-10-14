@@ -1,0 +1,21 @@
+[project]
+name = "campus-model"
+version = "0.1.0"
+description = "서경대 캠퍼스 길안내용 기기 안 위치 보정 모델(합성 자료 학습)"
+readme = "README.md"
+authors = [
+    { name = "SSANTA11", email = "ssanta011205@skuniv.ac.kr" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.5.4",
+    "onnx>=1.23.2",
+    "onnxruntime>=1.31.0",
+    "pyproj>=3.8.0",
+    "scikit-learn>=1.9.1",
+    "skl2onnx>=1.20.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.28,<0.12.0"]
+build-backend = "uv_build"
