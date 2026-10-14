@@ -1,0 +1,31 @@
+{
+ "note": "실제 C03(iPhone) 위치만, 걸음·기압 없음. 집계값.",
+ "pedometer_m": 1066,
+ "raw GPS": {
+  "path_m": 3110,
+  "path_over_pedometer": 2.92,
+  "step_median_m": 3.4,
+  "step_p90_m": 26.7,
+  "jumps_over_20m": 43,
+  "on_network": 0,
+  "uncertain": 0
+ },
+ "HMM": {
+  "path_m": 322,
+  "path_over_pedometer": 0.3,
+  "step_median_m": 0,
+  "step_p90_m": 0,
+  "jumps_over_20m": 6,
+  "on_network": 1,
+  "uncertain": 0.796
+ },
+ "HMM+trust": {
+  "path_m": 465,
+  "path_over_pedometer": 0.44,
+  "step_median_m": 0,
+  "step_p90_m": 0,
+  "jumps_over_20m": 11,
+  "on_network": 1,
+  "uncertain": 0.799
+ }
+}

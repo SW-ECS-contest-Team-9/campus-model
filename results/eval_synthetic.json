@@ -1,0 +1,121 @@
+{
+ "routes": 198,
+ "platforms": {
+  "ios": {
+   "routes": 98,
+   "rows": [
+    {
+     "method": "raw GPS",
+     "median_m": 28.1,
+     "p90_m": 85,
+     "edge_rate": null,
+     "floor_rate": null,
+     "wall_jumps_per_1000": 54.8
+    },
+    {
+     "method": "PDR only (start known)",
+     "median_m": 24.3,
+     "p90_m": 61,
+     "edge_rate": null,
+     "floor_rate": 0.975,
+     "wall_jumps_per_1000": 0
+    },
+    {
+     "method": "HMM",
+     "median_m": 23.1,
+     "p90_m": 60.4,
+     "edge_rate": 0.14,
+     "floor_rate": 0.238,
+     "wall_jumps_per_1000": 1.9
+    },
+    {
+     "method": "HMM+trust",
+     "median_m": 23,
+     "p90_m": 65.9,
+     "edge_rate": 0.142,
+     "floor_rate": 0.252,
+     "wall_jumps_per_1000": 1.9
+    },
+    {
+     "method": "HMM+trust (5s lag)",
+     "median_m": 22.3,
+     "p90_m": 65.2,
+     "edge_rate": 0.148,
+     "floor_rate": 0.256,
+     "wall_jumps_per_1000": 6.7
+    },
+    {
+     "method": "HMM+trust (start known)",
+     "median_m": 22.1,
+     "p90_m": 66.2,
+     "edge_rate": 0.155,
+     "floor_rate": 0.359,
+     "wall_jumps_per_1000": 1.8
+    }
+   ],
+   "latency": {
+    "median_ms": 0.582,
+    "p99_ms": 4.259,
+    "n": 55147
+   }
+  },
+  "android": {
+   "routes": 100,
+   "rows": [
+    {
+     "method": "raw GPS",
+     "median_m": 12.1,
+     "p90_m": 35.7,
+     "edge_rate": null,
+     "floor_rate": null,
+     "wall_jumps_per_1000": 19.9
+    },
+    {
+     "method": "PDR only (start known)",
+     "median_m": 23.3,
+     "p90_m": 60.6,
+     "edge_rate": null,
+     "floor_rate": 0.951,
+     "wall_jumps_per_1000": 0
+    },
+    {
+     "method": "HMM",
+     "median_m": 7.5,
+     "p90_m": 33,
+     "edge_rate": 0.285,
+     "floor_rate": 0.491,
+     "wall_jumps_per_1000": 1.9
+    },
+    {
+     "method": "HMM+trust",
+     "median_m": 7.2,
+     "p90_m": 32.6,
+     "edge_rate": 0.302,
+     "floor_rate": 0.513,
+     "wall_jumps_per_1000": 1.8
+    },
+    {
+     "method": "HMM+trust (5s lag)",
+     "median_m": 7,
+     "p90_m": 32,
+     "edge_rate": 0.322,
+     "floor_rate": 0.517,
+     "wall_jumps_per_1000": 5.2
+    },
+    {
+     "method": "HMM+trust (start known)",
+     "median_m": 7.2,
+     "p90_m": 32.5,
+     "edge_rate": 0.313,
+     "floor_rate": 0.599,
+     "wall_jumps_per_1000": 1.8
+    }
+   ],
+   "latency": {
+    "median_ms": 0.24,
+    "p99_ms": 5.762,
+    "n": 60829
+   }
+  }
+ }
+}
