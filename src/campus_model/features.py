@@ -5,14 +5,15 @@ from .geo import in_any_footprint
 
 FEATURE_NAMES = [
     "log_acc", "speed_valid", "course_valid", "log_dt", "log_jump_resid",
-    "log_spread", "inside_fp", "baro_change_10s", "steps_10s", "stale",
+    "log_spread", "inside_fp", "baro_change_10s", "steps_10s", "stale", "is_android",
 ]
 STRIDE_M = 0.7
 
 
 class FeatureState:
-    def __init__(self, footprints):
+    def __init__(self, footprints, platform="ios"):
         self.footprints = footprints
+        self.android = 1.0 if platform == "android" else 0.0
         self.fixes = []  # (t, x, y)
         self.steps = []  # t
         self.baro = []  # (t, h)
@@ -56,6 +57,7 @@ class FeatureState:
             min(bchg, 20.0),
             float(min(steps10, 30)),
             1.0 if (jump < 0.01 and len(self.fixes) > 1) else 0.0,
+            self.android,
         ]
         self.steps_since_fix = 0
         return f

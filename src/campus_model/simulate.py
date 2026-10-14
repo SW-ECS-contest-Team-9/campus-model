@@ -28,10 +28,23 @@ ASSUME = {
     "baro_noise": 0.1, "baro_drift_per_sqrt_s": 0.02,
     "fix_p_outdoor": 0.95, "indoor_on_mean_s": 8.0, "indoor_off_mean_s": 5.0,
     "bias_rho": 0.995, "bias_std_frac": 0.55, "white_std_frac": 0.04,
-    "indoor_err_mult": 1.5, "no_speed_err_mult": 1.2, "err_lognorm_sd": 0.35,
+    "indoor_err_mult": 1.2, "no_speed_err_mult": 1.1, "err_lognorm_sd": 0.35,
     "jump_p_outdoor": 0.01, "jump_p_indoor": 0.03, "jump_len_s": (3, 10),
     "speed_valid_outdoor": 0.85,
+    "acc_scale": 1.0,
 }
+
+# 기기 종류별 GPS 잡음. ios = C03(iPhone) 분포 그대로. android = 실측 없음, 사용자 현장 관찰
+# ("같은 길에서 안드로이드가 확실히 낫다", 2026-10-15, 한림관 등)에 맞춘 가정값 — 안드로이드 세션이 모이면 다시 맞출 것.
+PROFILES = {
+    "ios": {},
+    "android": {  # 가정(추정)
+        "acc_scale": 0.5, "indoor_err_mult": 1.0, "no_speed_err_mult": 1.0,
+        "jump_p_outdoor": 0.003, "jump_p_indoor": 0.01,
+        "indoor_on_mean_s": 20.0, "indoor_off_mean_s": 3.0, "speed_valid_outdoor": 0.95,
+    },
+}
+PLATFORM_CODE = {"ios": 0.0, "android": 1.0}
 
 
 def inv_cdf(qd, u):
@@ -103,8 +116,8 @@ def truth_track(segs, rng):
     return samples
 
 
-def sensors(samples, g, noise, rng):
-    A = ASSUME
+def sensors(samples, g, noise, rng, platform="ios"):
+    A = {**ASSUME, **PROFILES[platform]}
     ev = []
     # 걸음·방향
     stride = rng.uniform(*A["stride"])
@@ -158,7 +171,7 @@ def sensors(samples, g, noise, rng):
         # 정확도(상관된 분위)
         u = 0.9 * u + math.sqrt(1 - 0.81) * rng.normal()
         uq = 0.5 * (1 + math.erf(u / math.sqrt(2)))
-        acc = inv_cdf(noise["accuracy"]["all"], uq)
+        acc = inv_cdf(noise["accuracy"]["all"], uq) * A["acc_scale"]
         if not ind:
             acc *= A["outdoor_acc_scale"]
         speed_valid = rng.random() < (noise["speed_valid_ratio"]["indoor"] if ind else A["speed_valid_outdoor"])
@@ -193,8 +206,8 @@ def split_of(sig):
     return "test" if h == 0 else "val" if h == 1 else "train"
 
 
-def featurize(ev, footprints):
-    st = FeatureState(footprints)
+def featurize(ev, footprints, platform):
+    st = FeatureState(footprints, platform)
     X, y = [], []
     for e in ev:
         if e["type"] == "step":
@@ -221,20 +234,21 @@ def main():
         if not segs:
             continue
         samples = truth_track(segs, rng)
-        ev, truth = sensors(samples, g, noise, rng)
+        platform = "ios" if i % 2 == 0 else "android"
+        ev, truth = sensors(samples, g, noise, rng, platform)
         sp = split_of(sig)
         stats[sp] += 1
         if sp == "test":
-            if len(test) < 300:
-                test.append({"id": i, "events": ev, "truth": truth})
+            if len(test) < 400:
+                test.append({"id": i, "platform": platform, "events": ev, "truth": truth})
             continue
-        X, y = featurize(ev, g.footprints)
+        X, y = featurize(ev, g.footprints, platform)
         out[sp][0].extend(X)
         out[sp][1].extend(y)
     Path("data/synth").mkdir(parents=True, exist_ok=True)
     for sp, (X, y) in out.items():
         np.savez_compressed(f"data/synth/{sp}.npz", X=np.array(X, np.float32), y=np.array(y, np.float32))
-    Path("data/synth/test.json").write_text(json.dumps({"assume": ASSUME, "routes": test}), encoding="utf-8")
+    Path("data/synth/test.json").write_text(json.dumps({"assume": ASSUME, "profiles": PROFILES, "routes": test}), encoding="utf-8")
     print("routes", stats, "train fixes", len(out["train"][1]), "val fixes", len(out["val"][1]),
           "test routes", len(test), "features", FEATURE_NAMES)
 
