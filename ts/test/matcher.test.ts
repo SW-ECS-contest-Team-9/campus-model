@@ -99,6 +99,66 @@ describe('createMatcher', () => {
   });
 });
 
+/** 언덕 건물: 바깥 길(z=10)이 2F(z=10) 문으로 들어가고, 1F(z=6)는 같은 자리 아래. 가운데(x=50)에 승강기. */
+function hillBuilding(): MapPackage {
+  const out = (key: string, x: number) => ({ key, location: 'outdoor' as const, floorKey: null, x, y: 0, z: 10 });
+  return {
+    buildings: [{ key: 'b', footprint: [[0, -10], [100, -10], [100, 10], [0, 10]] }],
+    floors: [{ key: 'f:b:1F', buildingKey: 'b', floorZ: 6 }, { key: 'f:b:2F', buildingKey: 'b', floorZ: 10 }],
+    nodes: [out('o0', -60), out('o1', -10),
+      node('a2', 0, 0, 10, 'f:b:2F'), node('m2', 50, 0, 10, 'f:b:2F'), node('b2', 100, 0, 10, 'f:b:2F'),
+      node('a1', 0, 0, 6, 'f:b:1F'), node('m1', 50, 0, 6, 'f:b:1F'), node('b1', 100, 0, 6, 'f:b:1F')],
+    edges: [
+      edge('w', 'o0', 'o1', 'walkway', [[-60, 0, 10], [-10, 0, 10]]),
+      edge('door', 'o1', 'a2', 'corridor', [[-10, 0, 10], [0, 0, 10]]),
+      edge('c2a', 'a2', 'm2', 'corridor', [[0, 0, 10], [50, 0, 10]]), edge('c2b', 'm2', 'b2', 'corridor', [[50, 0, 10], [100, 0, 10]]),
+      edge('c1a', 'a1', 'm1', 'corridor', [[0, 0, 6], [50, 0, 6]]), edge('c1b', 'm1', 'b1', 'corridor', [[50, 0, 6], [100, 0, 6]]),
+      edge('lift', 'm1', 'm2', 'elevator', [[50, 0, 6], [50, 0, 10]]),
+    ],
+    walkAreas: [], walkAreaNodes: [],
+  };
+}
+
+describe('2차: 절대 높이·승강기·기압계 없음', () => {
+  it('바깥 평지 길에서 기압 영점을 잡는다', () => {
+    const m = createMatcher(hillBuilding());
+    for (const e of walk(-58, -14, 0, 0, () => 100, 4)) m.push(e);
+    expect(m.baroOffset()).not.toBeNull();
+    expect(m.baroOffset()!).toBeCloseTo(-90, 0);
+  });
+
+  it('문으로 2F 에 들어가 승강기로 내려가면 1F', () => {
+    const m = createMatcher(hillBuilding());
+    let r = null;
+    for (const e of walk(-58, -14, 0, 0, () => 100, 4)) r = m.push(e);
+    for (const e of walk(-12, 48, 40, 0, () => 100, 30)) r = m.push(e);
+    expect(r!.floor).toBe('f:b:2F');
+    // 승강기: 걸음 없이 기압만 4 m 내려감, GPS 없음
+    for (let k = 1; k <= 12; k++) r = m.push({ type: 'baro', t: 90 + k, h: 100 - Math.min(4, k * 0.5) });
+    for (const e of walk(52, 90, 103, 0, () => 96, 30)) r = m.push(e);
+    expect(r!.floor).toBe('f:b:1F');
+    expect(r!.z).toBeCloseTo(6, 0);
+  });
+
+  it('기압계가 없으면 사용자가 고른 층을 쓰고, setFloor 로 바꾼다', () => {
+    const m = createMatcher(twoFloors(), { userFloor: 'f2' });
+    let r = null;
+    for (const e of walk(10, 50, 0).filter((e) => e.type !== 'baro')) r = m.push(e);
+    expect(r!.floor).toBe('f2');
+    m.setFloor('f1');
+    for (const e of walk(50, 70, 40).filter((e) => e.type !== 'baro')) r = m.push(e);
+    expect(r!.floor).toBe('f1');
+  });
+
+  it('출력은 늘 길 위(길 밖 상태는 좋은 GPS 가 길에서 멀리 오래 있을 때만)', () => {
+    const m = createMatcher(twoFloors());
+    // 길에서 30 m 떨어진 좋은 GPS 5개: 아직 길로 끌어당긴다
+    let r = null;
+    for (let k = 0; k < 5; k++) r = m.push({ type: 'fix', t: k, x: 40 + k, y: 30, acc: 4 });
+    expect(r!.edgeKey).not.toBeNull();
+  });
+});
+
 describe('특징·믿음 모델', () => {
   it('Python 특징 계산과 같다', () => {
     const fx = JSON.parse(readFileSync(new URL('./fixtures/features_parity.json', import.meta.url), 'utf8'));

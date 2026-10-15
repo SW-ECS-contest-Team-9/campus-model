@@ -53,6 +53,8 @@ export interface MatcherOptions {
   trustGate?: boolean;
   /** 층별 사전 점수(log). 기압 영점을 아직 못 잡았을 때만 쓴다. 자주 머무는 층·수집 기준점·직전 세션 층에서 채운다. */
   floorPrior?: Record<string, number> | null;
+  /** 사용자가 고른 층(기압계 없는 기기용). 기압 표본이 한 번도 안 오면 그 건물 안에서는 이 층 후보만 쓴다. 실행 중 setFloor 로 바꿀 수 있다. */
+  userFloor?: string | null;
 }
 
 const enum K { Edge = 0, Area = 1, Off = 2 }
@@ -66,7 +68,7 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
   const o = {
     trust: null as TrustModel | null, strideM: 0.7, lagS: 5, maxCandidates: 60, sigmaMin: 5, sigmaMax: 50,
     radiusMin: 25, radiusMax: 120, offNetwork: true, emissionWeight: 0.3, platform: 'ios' as 'ios' | 'android', start: null as { x: number; y: number; z: number } | null,
-    anchor: true, anchorSigma: 1.0, anchorCap: 8, anchorMaxSigma: 10, anchorFootprintM: 8, anchorReject: 3, anchorAgree: 1.5, pdrVector: true, pdrVecSd: 2, offSustain: 10, switchPenalty: 0, trustGate: false, indoorPull: 1, floorPrior: null as Record<string, number> | null, ...options,
+    anchor: true, anchorSigma: 1.0, anchorCap: 8, anchorMaxSigma: 10, anchorFootprintM: 8, anchorReject: 3, anchorAgree: 1.5, pdrVector: true, pdrVecSd: 2, offSustain: 10, switchPenalty: 0, trustGate: false, indoorPull: 1, floorPrior: null as Record<string, number> | null, userFloor: null as string | null, ...options,
   };
   const feats = new FeatureState(g, o.platform);
   const cols: Col[] = [];
@@ -150,25 +152,38 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
   };
 
   const candidates = (x: number, y: number, sigma: number, pseudo: boolean, zPred: number | null): Cand[] => {
-    const r = pseudo ? Math.max(15, 3 * sigma) : Math.min(o.radiusMax, Math.max(o.radiusMin, 3 * sigma));
+    const r0 = pseudo ? Math.max(15, 3 * sigma) : Math.min(o.radiusMax, Math.max(o.radiusMin, 3 * sigma));
     const out: Cand[] = [];
     let nearest = Infinity;
-    for (const ei of edgesNear(g, x, y, r)) {
-      const e = g.edges[ei];
-      let f: number, d: number;
-      if (e.vertical) {
-        const z0 = e.pts[0][2], z1 = e.pts[e.pts.length - 1][2];
-        f = zPred === null || z1 === z0 ? 0 : Math.max(0, Math.min(1, (zPred - z0) / (z1 - z0)));
-        d = Math.hypot(e.pts[0][0] - x, e.pts[0][1] - y);
-      } else {
-        const p = project(e, x, y);
-        f = p.s / e.hlen;
-        d = p.d;
+    // 반경 안에 길이 없으면 넓혀 가며 찾는다(길로 끌어당김: 길 밖 상태는 마지막 수단)
+    for (const r of [r0, o.radiusMax, 300]) {
+      if (r < r0 || out.length) break;
+      for (const ei of edgesNear(g, x, y, r)) {
+        const e = g.edges[ei];
+        let f: number, d: number;
+        if (e.vertical) {
+          const z0 = e.pts[0][2], z1 = e.pts[e.pts.length - 1][2];
+          f = zPred === null || z1 === z0 ? 0 : Math.max(0, Math.min(1, (zPred - z0) / (z1 - z0)));
+          d = Math.hypot(e.pts[0][0] - x, e.pts[0][1] - y);
+        } else {
+          const p = project(e, x, y);
+          f = p.s / e.hlen;
+          d = p.d;
+        }
+        nearest = Math.min(nearest, d);
+        if (d > r) continue;
+        const [px, py, pz] = pointAt(e, f);
+        out.push({ k: K.Edge, e: ei, f, x: px, y: py, z: pz, d });
       }
-      nearest = Math.min(nearest, d);
-      if (d > r) continue;
-      const [px, py, pz] = pointAt(e, f);
-      out.push({ k: K.Edge, e: ei, f, x: px, y: py, z: pz, d });
+      if (pseudo) break;
+    }
+    if (o.userFloor && !baroSeen) {
+      // 기압계 없음: 고른 층의 건물 안에서는 그 층(과 층 없는 바깥) 후보만 남긴다
+      const bp = o.userFloor.slice(0, o.userFloor.lastIndexOf(':') + 1);
+      for (let k = out.length - 1; k >= 0; k--) {
+        const fk = floorOf(out[k]);
+        if (fk && fk !== o.userFloor && fk.startsWith(bp)) out.splice(k, 1);
+      }
     }
     out.sort((a, b) => a.d - b.d || a.e - b.e);
     out.length = Math.min(out.length, o.maxCandidates);
@@ -346,5 +361,7 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
 
   /** 기압 영점(절대 높이 = 기압 + off). 기준을 아직 못 잡았으면 null. */
   const baroOffset = () => (offN > 0 ? off : null);
-  return { push, graph: g, baroOffset };
+  /** 사용자가 층을 고르면 부른다(기압계 없는 기기에서 층 판정에 쓰임). null 이면 해제. */
+  const setFloor = (floorKey: string | null) => { o.userFloor = floorKey; };
+  return { push, graph: g, baroOffset, setFloor };
 }
