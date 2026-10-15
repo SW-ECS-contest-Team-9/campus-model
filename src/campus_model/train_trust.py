@@ -1,9 +1,10 @@
 """GPS 믿음 모델 학습: 특징 → ln(실제 오차 m). 작은 MLP(10→16→16→1).
 
-출력: models/trust_mlp.json(TS 순수 구현용 가중치), models/trust_mlp.onnx(opset 13), results/trust_train.json.
+출력: models/{name}.json(TS 순수 구현용 가중치), models/{name}.onnx(opset 13), results/{name}_train.json.
 HMM 이 쓰는 sigma = exp(예측) × sigma_scale (2차원 정규 오차의 sigma 가 되도록 검증셋 중앙값으로 맞춤).
 """
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -22,7 +23,10 @@ RAYLEIGH_MEDIAN = 1.1774
 def main():
     tr = np.load("data/synth/train.npz")
     va = np.load("data/synth/val.npz")
-    Xt, yt, Xv, yv = tr["X"], tr["y"], va["X"], va["y"]
+    # 사용: train_trust [특징 수=11] [이름=trust_mlp]. 13 이면 2차 특징까지(실험 모델).
+    nf = int(sys.argv[1]) if len(sys.argv) > 1 else 11
+    name = sys.argv[2] if len(sys.argv) > 2 else "trust_mlp"
+    Xt, yt, Xv, yv = tr["X"][:, :nf], tr["y"], va["X"][:, :nf], va["y"]
     pipe = make_pipeline(StandardScaler(), MLPRegressor(hidden_layer_sizes=(16, 16), max_iter=60, early_stopping=True,
                                                         random_state=0, batch_size=1024, learning_rate_init=3e-3))
     pipe.fit(Xt, yt)
@@ -40,17 +44,17 @@ def main():
     }
     sc, mlp = pipe.steps[0][1], pipe.steps[1][1]
     model = {
-        "name": "trust_mlp", "version": 1, "features": FEATURE_NAMES,
+        "name": name, "version": 1 if nf == 11 else 2, "features": FEATURE_NAMES[:nf],
         "mean": sc.mean_.tolist(), "std": sc.scale_.tolist(),
         "layers": [{"W": W.T.round(6).tolist(), "b": b.round(6).tolist()} for W, b in zip(mlp.coefs_, mlp.intercepts_)],
         "activation": "relu", "output": "ln_err_m", "sigma_scale": round(scale, 5),
     }
     Path("models").mkdir(exist_ok=True)
-    Path("models/trust_mlp.json").write_text(json.dumps(model), encoding="utf-8")
+    Path(f"models/{name}.json").write_text(json.dumps(model), encoding="utf-8")
     onx = to_onnx(pipe, Xt[:1].astype(np.float32), target_opset=13)
-    Path("models/trust_mlp.onnx").write_bytes(onx.SerializeToString())
+    Path(f"models/{name}.onnx").write_bytes(onx.SerializeToString())
     # ONNX 와 JSON 순수 계산이 같은지 확인
-    sess = ort.InferenceSession("models/trust_mlp.onnx")
+    sess = ort.InferenceSession(f"models/{name}.onnx")
     po = sess.run(None, {sess.get_inputs()[0].name: Xv[:1000]})[0].ravel()
     h = (Xv[:1000] - model["mean"]) / model["std"]
     for i, L in enumerate(model["layers"]):
@@ -58,10 +62,10 @@ def main():
         if i < len(model["layers"]) - 1:
             h = np.maximum(h, 0)
     rep["onnx_vs_json_maxdiff"] = float(np.abs(po - h.ravel()).max())
-    rep["onnx_bytes"] = Path("models/trust_mlp.onnx").stat().st_size
-    rep["json_bytes"] = Path("models/trust_mlp.json").stat().st_size
+    rep["onnx_bytes"] = Path(f"models/{name}.onnx").stat().st_size
+    rep["json_bytes"] = Path(f"models/{name}.json").stat().st_size
     Path("results").mkdir(exist_ok=True)
-    Path("results/trust_train.json").write_text(json.dumps(rep, indent=1), encoding="utf-8")
+    Path(f"results/{name}_train.json").write_text(json.dumps(rep, indent=1), encoding="utf-8")
     print(json.dumps(rep, indent=1))
 
 

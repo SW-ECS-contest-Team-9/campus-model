@@ -17,7 +17,8 @@ export function loadTrustModel(json: TrustModelJson): TrustModel {
   const layers = json.layers.map((L) => ({ W: L.W.map((r) => Float64Array.from(r)), b: Float64Array.from(L.b) }));
   return {
     sigma(f: number[]): number {
-      let h = f.map((v, i) => (v - json.mean[i]) / json.std[i]);
+      // 모델이 아는 앞쪽 특징만 쓴다(1차 모델 11개, 2차 13개)
+      let h = json.mean.map((m, i) => (f[i] - m) / json.std[i]);
       layers.forEach((L, li) => {
         const o = new Array<number>(L.b.length);
         for (let r = 0; r < L.b.length; r++) {

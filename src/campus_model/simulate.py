@@ -211,7 +211,7 @@ def featurize(ev, footprints, platform):
     X, y = [], []
     for e in ev:
         if e["type"] == "step":
-            st.step(e["t"])
+            st.step(e["t"], e["heading"])
         elif e["type"] == "baro":
             st.baro_sample(e["t"], e["h"])
         else:
