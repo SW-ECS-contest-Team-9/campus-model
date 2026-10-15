@@ -150,6 +150,31 @@ describe('2차: 절대 높이·승강기·기압계 없음', () => {
     expect(r!.floor).toBe('f1');
   });
 
+  it('실내 길 없는 건물(한림관 꼴)은 건물 자체로 끌어당기고 기압으로 층을 정한다', () => {
+    const out = (key: string, x: number) => ({ key, location: 'outdoor' as const, floorKey: null, x, y: 0, z: 10 });
+    const pkg: MapPackage = {
+      buildings: [{ key: 'h', footprint: [[200, -30], [260, -30], [260, 30], [200, 30]] }],
+      floors: [{ key: 'f:h:1F', buildingKey: 'h', floorZ: 10 }, { key: 'f:h:5F', buildingKey: 'h', floorZ: 26 }],
+      nodes: [out('o0', 100), out('o1', 195)],
+      edges: [edge('w', 'o0', 'o1', 'walkway', [[100, 0, 10], [195, 0, 10]])],
+      walkAreas: [], walkAreaNodes: [],
+    };
+    const m = createMatcher(pkg);
+    let r = null;
+    for (const e of walk(110, 194, 0, 0, () => 50, 4)) r = m.push(e);
+    expect(r!.edgeKey).toBe('w');
+    for (const e of walk(196, 230, 70, 0, () => 50, 25)) r = m.push(e);
+    expect(r!.buildingKey).toBe('h');
+    expect(r!.floor).toBe('f:h:1F');
+    // 승강기: 걸음 없이 기압 +16 m, 건물 안 GPS
+    for (let k = 1; k <= 20; k++) {
+      r = m.push({ type: 'baro', t: 100 + k, h: 50 + Math.min(16, k) });
+      r = m.push({ type: 'fix', t: 100 + k + 0.5, x: 230, y: 3, acc: 30 });
+    }
+    expect(r!.buildingKey).toBe('h');
+    expect(r!.floor).toBe('f:h:5F');
+  });
+
   it('출력은 늘 길 위(길 밖 상태는 좋은 GPS 가 길에서 멀리 오래 있을 때만)', () => {
     const m = createMatcher(twoFloors());
     // 길에서 30 m 떨어진 좋은 GPS 5개: 아직 길로 끌어당긴다

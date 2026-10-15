@@ -32,6 +32,8 @@ export interface Graph {
   dist: Float64Array; // n*n, dist[a*n+b] = a→b
   n: number;
   footprints: [number, number][][];
+  /** 실내 길이 하나도 없는 건물(외곽선·층 높이만 있음). 길 대신 건물 자체로 끌어당긴다. */
+  bareBuildings: { key: string; poly: [number, number][]; floors: { key: string; z: number }[] }[];
   cell: number;
   grid: Map<string, number[]>;
 }
@@ -99,6 +101,10 @@ export function buildGraph(pkg: MapPackage): Graph {
     nodes, edges, areas, n, dist, grid, cell: CELL,
     outdoorNodes: nodes.map((nd, i) => (nd.outdoor ? i : -1)).filter((i) => i >= 0),
     footprints: pkg.buildings.filter((b) => b.footprint).map((b) => b.footprint!),
+    bareBuildings: pkg.buildings
+      .filter((b) => b.footprint && !pkg.nodes.some((n) => n.location === 'indoor' && n.floorKey && (pkg.floors.find((f) => f.key === n.floorKey)?.buildingKey === b.key)))
+      .map((b) => ({ key: b.key, poly: b.footprint!, floors: pkg.floors.filter((f) => f.buildingKey === b.key && f.floorZ !== null).map((f) => ({ key: f.key, z: f.floorZ! })) }))
+      .filter((b) => b.floors.length > 0),
   };
 }
 

@@ -12,8 +12,10 @@ export type SensorEvent =
 export interface MatchResult {
   t: number; x: number; y: number; z: number;
   floor: string | null; edgeKey: string | null;
-  /** 보행 면 안이면 그 면 키. edgeKey·areaKey 가 둘 다 null 이면 길 밖 상태. */
+  /** 보행 면 안이면 그 면 키. */
   areaKey: string | null;
+  /** 실내 길이 없는 건물 안 상태면 그 건물 키(층은 floor). edgeKey·areaKey·buildingKey 가 모두 null 이면 길 밖 상태. */
+  buildingKey: string | null;
   state: 'ok' | 'uncertain';
   /** lagS 초 전 시점의 지연 보정값(고정 지연 Viterbi 역추적). 화면 표시는 x,y, 기록·분석엔 lagged. */
   lagged: { t: number; x: number; y: number; z: number; floor: string | null; edgeKey: string | null } | null;
@@ -55,9 +57,11 @@ export interface MatcherOptions {
   floorPrior?: Record<string, number> | null;
   /** 사용자가 고른 층(기압계 없는 기기용). 기압 표본이 한 번도 안 오면 그 건물 안에서는 이 층 후보만 쓴다. 실행 중 setFloor 로 바꿀 수 있다. */
   userFloor?: string | null;
+  /** 실내 길이 없는 건물(예: 한림관)도 상태로 둔다. 사전 점수(log)는 bareBuildingPrior. */
+  bareBuildings?: boolean; bareBuildingPrior?: number;
 }
 
-const enum K { Edge = 0, Area = 1, Off = 2 }
+const enum K { Edge = 0, Area = 1, Off = 2, Bldg = 3 }
 interface Cand { k: K; e: number; f: number; x: number; y: number; z: number; d: number; ex?: [number, number][]; en?: [number, number][] }
 interface Col { t: number; c: Cand[]; s: Float64Array; b: Int32Array; reset: boolean }
 
@@ -68,7 +72,7 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
   const o = {
     trust: null as TrustModel | null, strideM: 0.7, lagS: 5, maxCandidates: 60, sigmaMin: 5, sigmaMax: 50,
     radiusMin: 25, radiusMax: 120, offNetwork: true, emissionWeight: 0.3, platform: 'ios' as 'ios' | 'android', start: null as { x: number; y: number; z: number } | null,
-    anchor: true, anchorSigma: 1.0, anchorCap: 8, anchorMaxSigma: 10, anchorFootprintM: 8, anchorReject: 3, anchorAgree: 1.5, pdrVector: true, pdrVecSd: 2, offSustain: 10, switchPenalty: 0, trustGate: false, indoorPull: 1, floorPrior: null as Record<string, number> | null, userFloor: null as string | null, ...options,
+    anchor: true, anchorSigma: 1.0, anchorCap: 8, anchorMaxSigma: 10, anchorFootprintM: 8, anchorReject: 3, anchorAgree: 1.5, pdrVector: true, pdrVecSd: 2, offSustain: 10, switchPenalty: 0, trustGate: false, indoorPull: 1, floorPrior: null as Record<string, number> | null, userFloor: null as string | null, bareBuildings: true, bareBuildingPrior: -1, ...options,
   };
   const feats = new FeatureState(g, o.platform);
   const cols: Col[] = [];
@@ -102,6 +106,11 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
   const floorOf = (c: Cand): string | null => {
     if (c.k === K.Area) return g.areas[c.e].floorKey;
     if (c.k === K.Off) return null;
+    if (c.k === K.Bldg) {
+      let best = g.bareBuildings[c.e].floors[0];
+      for (const f of g.bareBuildings[c.e].floors) if (Math.abs(f.z - c.z) < Math.abs(best.z - c.z)) best = f;
+      return isFinite(c.z) ? best.key : null;
+    }
     const e = g.edges[c.e];
     const a = g.nodes[e.from], b = g.nodes[e.to];
     return Math.abs(a.z - c.z) <= Math.abs(b.z - c.z) ? a.floorKey : b.floorKey;
@@ -137,8 +146,10 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
       const e = g.edges[a.e];
       if (b.f >= a.f && e.fwd) best = (b.f - a.f) * e.len;
       if (a.f >= b.f && e.back) best = Math.min(best, (a.f - b.f) * e.len);
-    } else if (a.k !== K.Edge && b.k !== K.Edge) {
+    } else if ((a.k !== K.Edge && b.k !== K.Edge) || a.k === K.Bldg || b.k === K.Bldg) {
+      // 실내 길 없는 건물은 문이 모델에 없으므로 바로 옆 길에서 곧장 들어간다고 본다
       best = Math.hypot(a.x - b.x, a.y - b.y);
+      if (a.k === K.Bldg || b.k === K.Bldg) return best;
     }
     const n = g.n;
     for (const [n1, c1] of exits(a)) {
@@ -191,6 +202,13 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
     g.areas.forEach((a, ai) => {
       if (pointInPoly(x, y, a.poly)) out.push({ k: K.Area, e: ai, f: 0, x, y, z: a.z ?? zFree, d: 0 });
     });
+    // 실내 길이 없는 건물: 관측이 외곽선 안이면 건물 자체를 상태로 둔다(높이는 기압으로 이어 감 → 층)
+    if (o.bareBuildings) {
+      const zA = o.anchor && baroSeen && offN > 0 ? baroNow + off : zFree;
+      g.bareBuildings.forEach((bb, bi) => {
+        if (pointInPoly(x, y, bb.poly)) out.push({ k: K.Bldg, e: bi, f: 0, x, y, z: zA, d: 0 });
+      });
+    }
     // 길 밖 상태는 GPS 가 아주 좋고 모든 길에서 멀리 떨어진 상태가 offSustain 번 이어졌을 때만(그 전엔 길로 끌어당긴다)
     if (!pseudo) offRun = sigma <= 8 && nearest > 25 && !inAnyFootprint(g, x, y) ? offRun + 1 : 0;
     const offOk = o.offNetwork && !pseudo && offRun >= o.offSustain;
@@ -200,7 +218,7 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
 
   const emission = (d: number, sigma: number) =>
     Math.log((1 - EPS) * Math.exp((-d * d) / (2 * sigma * sigma)) / (sigma * sigma) + EPS / OUT2);
-  const prior = (c: Cand) => (c.k === K.Off ? -3 : c.k === K.Area ? -3 : 0);
+  const prior = (c: Cand) => (c.k === K.Off ? -3 : c.k === K.Area ? -3 : c.k === K.Bldg ? o.bareBuildingPrior : 0);
 
   const update = (t: number, x: number, y: number, sigma: number, pseudo: boolean) => {
     const prev = cols[cols.length - 1];
@@ -319,7 +337,7 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
     while (k > 0 && cols[k].t > t - o.lagS && cols[k].b[li] >= 0) { li = cols[k].b[li]; k--; }
     const lc = cols[k].c[li];
     return {
-      t, x, y, z, floor: floorOf({ ...c, z }), edgeKey: c.k === K.Edge ? g.edges[c.e].key : null, areaKey: c.k === K.Area ? g.areas[c.e].key : null,
+      t, x, y, z, floor: floorOf({ ...c, z }), edgeKey: c.k === K.Edge ? g.edges[c.e].key : null, areaKey: c.k === K.Area ? g.areas[c.e].key : null, buildingKey: c.k === K.Bldg ? g.bareBuildings[c.e].key : null,
       state: uncertain ? 'uncertain' : 'ok',
       lagged: { t: cols[k].t, x: lc.x, y: lc.y, z: lc.z, floor: floorOf(lc), edgeKey: lc.k === K.Edge ? g.edges[lc.e].key : null },
     };
