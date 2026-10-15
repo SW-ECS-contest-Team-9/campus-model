@@ -105,7 +105,7 @@ describe('특징·믿음 모델', () => {
     const st = new FeatureState({ footprints: fx.footprints }, fx.platform);
     const got: number[][] = [];
     for (const e of fx.events) {
-      if (e.type === 'step') st.step(e.t);
+      if (e.type === 'step') st.step(e.t, e.heading);
       else if (e.type === 'baro') st.baroSample(e.t, e.h);
       else got.push(st.fix(e.t, e.x, e.y, e.acc, e.speed, e.course));
     }

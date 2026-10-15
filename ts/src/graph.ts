@@ -158,6 +158,21 @@ export function inAnyFootprint(g: { footprints: [number, number][][] }, x: numbe
   return g.footprints.some((fp) => pointInPoly(x, y, fp));
 }
 
+/** 점에서 가장 가까운 건물 외곽선까지 거리(안이면 0). */
+export function footprintDist(g: { footprints: [number, number][][] }, x: number, y: number): number {
+  let best = Infinity;
+  for (const fp of g.footprints) {
+    if (pointInPoly(x, y, fp)) return 0;
+    for (let i = 0, j = fp.length - 1; i < fp.length; j = i++) {
+      const [ax, ay] = fp[j], [bx, by] = fp[i];
+      const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+      const t = L2 > 0 ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / L2)) : 0;
+      best = Math.min(best, Math.hypot(x - ax - dx * t, y - ay - dy * t));
+    }
+  }
+  return best;
+}
+
 /** 선분이 다각형 경계를 가로지르는가. */
 export function segCrossesPoly(ax: number, ay: number, bx: number, by: number, poly: [number, number][]): boolean {
   const cr = (ox: number, oy: number, px: number, py: number, qx: number, qy: number) => (px - ox) * (qy - oy) - (py - oy) * (qx - ox);

@@ -1,6 +1,6 @@
 // 기기 안 길 맞춤(HMM, 고정 지연 Viterbi). 상태 = 길 위 점 / 보행 면 / 길 밖(바깥 열린 곳).
 // 층은 길 그래프로만 바뀐다(계단·승강기·경사로 길을 지나야 함). 기압은 층에 대한 부드러운 증거.
-import { buildGraph, edgesNear, inAnyFootprint, pointAt, pointInPoly, project, type Graph, type MapPackage } from './graph';
+import { buildGraph, edgesNear, footprintDist, inAnyFootprint, pointAt, pointInPoly, project, type Graph, type MapPackage } from './graph';
 import { FeatureState } from './features';
 import type { TrustModel } from './trust';
 
@@ -12,6 +12,8 @@ export type SensorEvent =
 export interface MatchResult {
   t: number; x: number; y: number; z: number;
   floor: string | null; edgeKey: string | null;
+  /** 보행 면 안이면 그 면 키. edgeKey·areaKey 가 둘 다 null 이면 길 밖 상태. */
+  areaKey: string | null;
   state: 'ok' | 'uncertain';
   /** lagS 초 전 시점의 지연 보정값(고정 지연 Viterbi 역추적). 화면 표시는 x,y, 기록·분석엔 lagged. */
   lagged: { t: number; x: number; y: number; z: number; floor: string | null; edgeKey: string | null } | null;
@@ -31,6 +33,26 @@ export interface MatcherOptions {
   platform?: 'ios' | 'android';
   /** 출발점을 알면(사용자가 고른 출발지, 직전 세션 끝 등) 첫 상태를 그 근처로 묶는다. 층 판정이 크게 좋아진다. */
   start?: { x: number; y: number; z: number } | null;
+  /** 절대 높이 기준: 확실히 바깥 길 위일 때 (길 높이 − 기압)으로 기압 영점을 잡고, 이후 후보 높이를 절대값으로 비교한다. */
+  anchor?: boolean;
+  /** 절대 높이 비교의 표준편차(m). */
+  anchorSigma?: number;
+  /** 절대 높이 벌점 상한(기압 표류·영점 오류 때 길 없이 층을 건너뛰지 않게). */
+  anchorCap?: number;
+  /** 기준 표본 조건: GPS sigma 이하(m), 건물 외곽선에서 이만큼 떨어짐(m). 받아들인 영점과 이만큼 넘게 다르면 버림(m). */
+  anchorMaxSigma?: number; anchorFootprintM?: number; anchorReject?: number; anchorAgree?: number;
+  /** 전이 점수에 걸음 벡터(걸음 수 × 보폭, 방향)와 상태 간 변위의 차이를 넣는다. */
+  pdrVector?: boolean; pdrVecSd?: number;
+  /** 길 밖 상태를 허용하기 전 필요한 연속 '아주 좋은 GPS + 길에서 25 m 넘게' 위치 수. */
+  offSustain?: number;
+  /** 다른 길(또는 면)로 옮길 때 전이 벌점: 지금 길을 따라 미끄러지게 한다. */
+  switchPenalty?: number;
+  /** GPS sigma 가 10→30 m 로 나빠질수록 건물 안(층 있는) 후보에 더하는 점수(최대값). */
+  indoorPull?: number;
+  /** 믿음 모델을 sigma 를 키울 때만 쓴다(보고 정확도보다 더 믿지 않음). */
+  trustGate?: boolean;
+  /** 층별 사전 점수(log). 기압 영점을 아직 못 잡았을 때만 쓴다. 자주 머무는 층·수집 기준점·직전 세션 층에서 채운다. */
+  floorPrior?: Record<string, number> | null;
 }
 
 const enum K { Edge = 0, Area = 1, Off = 2 }
@@ -43,7 +65,8 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
   const g: Graph = 'dist' in pkgOrGraph ? (pkgOrGraph as Graph) : buildGraph(pkgOrGraph as MapPackage);
   const o = {
     trust: null as TrustModel | null, strideM: 0.7, lagS: 5, maxCandidates: 60, sigmaMin: 5, sigmaMax: 50,
-    radiusMin: 25, radiusMax: 120, offNetwork: true, emissionWeight: 0.3, platform: 'ios' as 'ios' | 'android', start: null as { x: number; y: number; z: number } | null, ...options,
+    radiusMin: 25, radiusMax: 120, offNetwork: true, emissionWeight: 0.3, platform: 'ios' as 'ios' | 'android', start: null as { x: number; y: number; z: number } | null,
+    anchor: true, anchorSigma: 1.0, anchorCap: 8, anchorMaxSigma: 10, anchorFootprintM: 8, anchorReject: 3, anchorAgree: 1.5, pdrVector: true, pdrVecSd: 2, offSustain: 10, switchPenalty: 0, trustGate: false, indoorPull: 1, floorPrior: null as Record<string, number> | null, ...options,
   };
   const feats = new FeatureState(g, o.platform);
   const cols: Col[] = [];
@@ -52,6 +75,27 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
   let pdrX = 0, pdrY = 0, pdrSteps = 0;
   let lastFixT = -Infinity, lastUpdT = -Infinity, lastSigma = 50;
   let last: MatchResult | null = null;
+  // 기압 영점: 절대 높이 = 기압 + off. offN = 받아들인 기준 표본 수(0 이면 모름)
+  let off = 0, offN = 0, offRun = 0;
+  let pend: number[] = []; // 기준을 처음 잡기 전 모으는 표본
+  const anchorEdge = (c: Cand) => {
+    if (c.k !== K.Edge) return false;
+    const e = g.edges[c.e];
+    return g.nodes[e.from].outdoor && g.nodes[e.to].outdoor && e.kind !== 'stairs' && e.kind !== 'elevator';
+  };
+  const anchorSample = (s: number) => {
+    if (offN === 0) {
+      // 처음엔 연속 표본 3개가 1.5 m 안에서 맞아야 받아들인다
+      pend.push(s);
+      if (pend.length > 3) pend.shift();
+      if (pend.length < 3 || Math.max(...pend) - Math.min(...pend) > 1.5) return;
+      off = (pend[0] + pend[1] + pend[2]) / 3; offN = 3; pend = [];
+      return;
+    }
+    if (Math.abs(s - off) > o.anchorReject) return; // 튀는 표본(잘못 맞춘 바깥 길)은 버린다
+    offN++;
+    off += (s - off) / Math.min(offN, 10);
+  };
 
   const floorOf = (c: Cand): string | null => {
     if (c.k === K.Area) return g.areas[c.e].floorKey;
@@ -132,7 +176,9 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
     g.areas.forEach((a, ai) => {
       if (pointInPoly(x, y, a.poly)) out.push({ k: K.Area, e: ai, f: 0, x, y, z: a.z ?? zFree, d: 0 });
     });
-    const offOk = o.offNetwork && !pseudo && sigma <= 15 && nearest > 20 && !inAnyFootprint(g, x, y);
+    // 길 밖 상태는 GPS 가 아주 좋고 모든 길에서 멀리 떨어진 상태가 offSustain 번 이어졌을 때만(그 전엔 길로 끌어당긴다)
+    if (!pseudo) offRun = sigma <= 8 && nearest > 25 && !inAnyFootprint(g, x, y) ? offRun + 1 : 0;
+    const offOk = o.offNetwork && !pseudo && offRun >= o.offSustain;
     if (offOk || out.length === 0) out.push({ k: K.Off, e: -1, f: 0, x, y, z: zFree, d: 0 });
     return out;
   };
@@ -161,8 +207,16 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
     const pdr = pdrSteps * o.strideM;
     const dt = prev ? t - prev.t : 0;
     let reset = !prev;
+    const zAbs = o.anchor && baroSeen && offN > 0 ? baroNow + off : NaN;
     for (let j = 0; j < c.length; j++) {
-      const em = (pseudo ? 1 : o.emissionWeight) * emission(c[j].d, sigma) + prior(c[j]);
+      let em = (pseudo ? 1 : o.emissionWeight) * emission(c[j].d, sigma) + prior(c[j]);
+      if (c[j].k !== K.Off && isFinite(zAbs) && isFinite(c[j].z)) em -= Math.min(o.anchorCap, (c[j].z - zAbs) ** 2 / (2 * o.anchorSigma ** 2));
+      if (o.indoorPull || o.floorPrior) {
+        const fk = floorOf(c[j]);
+        // GPS 가 나쁠수록(실내 꼴) 건물 안 길 쪽으로 끌어당김
+        if (fk && o.indoorPull && !pseudo) em += o.indoorPull * Math.max(0, Math.min(1, (sigma - 10) / 20));
+        if (fk && o.floorPrior && !(isFinite(zAbs))) em += o.floorPrior[fk] ?? 0;
+      }
       if (!prev) {
         const st = o.start;
         s[j] = st ? em - (Math.hypot(c[j].x - st.x, c[j].y - st.y) ** 2 + 4 * (isFinite(c[j].z) ? (c[j].z - st.z) ** 2 : 0)) / 32 : em;
@@ -176,10 +230,18 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
         let pen: number;
         if (stepsSeen) {
           const exp = pdr + Math.abs(dB);
+          // 걸음 없이 길 위로 멀리 옮겨 가는 전이는 없다(기압만 바뀐 경우 층을 길 없이 건너뛰지 않게)
+          if (pdrSteps === 0 && dn > exp + 8) continue;
           pen = Math.abs(dn - exp) / (3 + 0.2 * exp);
+          if (o.pdrVector) {
+            // 걸음 방향까지: 두 상태 사이 수평 변위 vs 걸음 벡터 합
+            const ex = c[j].x - prev.c[i].x - pdrX, ey = c[j].y - prev.c[i].y - pdrY;
+            pen += Math.hypot(ex, ey) / (o.pdrVecSd + 0.15 * pdr);
+          }
         } else {
           pen = Math.max(0, dn - 2.5 * dt - 3) / 5 + dn / 30;
         }
+        if (o.switchPenalty && (prev.c[i].k !== c[j].k || prev.c[i].e !== c[j].e)) pen += o.switchPenalty;
         const zi = prev.c[i].z, zj = c[j].z;
         if (baroSeen && isFinite(zi) && isFinite(zj)) pen += ((zj - zi - dB) ** 2) / (2 * 0.6 * 0.6);
         const v = prev.s[i] - pen;
@@ -197,6 +259,14 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
     for (const v of s) mx = Math.max(mx, v);
     for (let j = 0; j < s.length; j++) s[j] -= mx;
     cols.push({ t, c, s, b, reset });
+    if (o.anchor && baroSeen && !pseudo && sigma <= o.anchorMaxSigma && footprintDist(g, x, y) >= o.anchorFootprintM) {
+      // 최선 상태가 바깥 평지 길이고, GPS 가 그 자리와 맞고(1.5 sigma), 15 m 넘게 떨어진 경쟁 상태가 없을 때만
+      const col = cols[cols.length - 1], bi = bestIdx(col), bc = c[bi];
+      let ok = anchorEdge(bc) && bc.d <= o.anchorAgree * sigma;
+      for (let j = 0; j < c.length && ok; j++)
+        if (j !== bi && col.s[j] > -3 && Math.hypot(c[j].x - bc.x, c[j].y - bc.y) > 15) ok = false;
+      if (ok) anchorSample(bc.z - baroNow);
+    }
     while (cols.length > 2 && cols[1].t < t - o.lagS - 1) cols.shift();
     pdrX = pdrY = 0; pdrSteps = 0; baroAtUpd = baroNow; lastUpdT = t;
   };
@@ -234,7 +304,7 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
     while (k > 0 && cols[k].t > t - o.lagS && cols[k].b[li] >= 0) { li = cols[k].b[li]; k--; }
     const lc = cols[k].c[li];
     return {
-      t, x, y, z, floor: floorOf({ ...c, z }), edgeKey: c.k === K.Edge ? g.edges[c.e].key : null,
+      t, x, y, z, floor: floorOf({ ...c, z }), edgeKey: c.k === K.Edge ? g.edges[c.e].key : null, areaKey: c.k === K.Area ? g.areas[c.e].key : null,
       state: uncertain ? 'uncertain' : 'ok',
       lagged: { t: cols[k].t, x: lc.x, y: lc.y, z: lc.z, floor: floorOf(lc), edgeKey: lc.k === K.Edge ? g.edges[lc.e].key : null },
     };
@@ -242,13 +312,16 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
 
   function push(ev: SensorEvent): MatchResult | null {
     if (ev.type === 'baro') {
-      if (!baroSeen) { baroSeen = true; baroAtUpd = ev.h; }
+      if (!baroSeen) {
+        baroSeen = true; baroAtUpd = ev.h;
+        if (o.start) { off = o.start.z - ev.h; offN = 10; }
+      }
       baroNow = ev.h;
       feats.baroSample(ev.t, ev.h);
       if (last && Math.abs(baroNow - baroAtUpd) > 2.5 && ev.t - lastUpdT >= 2) update(ev.t, last.x, last.y, 8, true);
     } else if (ev.type === 'step') {
       stepsSeen = true;
-      feats.step(ev.t);
+      feats.step(ev.t, ev.heading);
       const h = (ev.heading * Math.PI) / 180;
       pdrX += o.strideM * Math.sin(h);
       pdrY += o.strideM * Math.cos(h);
@@ -260,7 +333,7 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
       }
     } else {
       const f = feats.fix(ev.t, ev.x, ev.y, ev.acc, ev.speed ?? -1, ev.course ?? -1);
-      const raw = o.trust ? o.trust.sigma(f) : ev.acc;
+      const raw = o.trust ? (o.trustGate ? Math.max(ev.acc, o.trust.sigma(f)) : o.trust.sigma(f)) : ev.acc;
       const sigma = Math.max(o.sigmaMin, Math.min(o.sigmaMax, raw));
       lastSigma = sigma;
       lastFixT = ev.t;
@@ -271,5 +344,7 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
     return r;
   }
 
-  return { push, graph: g };
+  /** 기압 영점(절대 높이 = 기압 + off). 기준을 아직 못 잡았으면 null. */
+  const baroOffset = () => (offN > 0 ? off : null);
+  return { push, graph: g, baroOffset };
 }
