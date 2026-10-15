@@ -1,4 +1,26 @@
-# campus-model — 기기 안 위치 보정 모델 1차
+# campus-model — 기기 안 위치 보정 모델 (2차 = v2, 아래 1차 기록 유지)
+
+## INTEGRATION (v2, 앱에 넣는 법)
+목표: 위치를 이미 만든 통로(길·보행 면)로, 길이 없는 건물(한림관·청운관)은 건물 자체로 **끌어당긴다**. 출력은 늘 길·면·건물 위이고, 길 밖 상태는 아주 좋은 GPS 가 모든 길에서 25 m 넘게 10번 이어질 때만 나온다. `state: 'uncertain'` 은 표시용 꼬리표일 뿐 끌어당김을 멈추지 않는다.
+
+1. 복사(외부 의존 없음, Node API 없음, Hermes 안전, 결정적): `ts/src/{graph,features,trust,matcher,bench,index}.ts` → `C:\campus-client\src\location\matcher\`, 모델 `models/trust_mlp_v2.json`(약 12 KB) → 같은 폴더.
+2. 꾸러미를 받은 뒤 한 번(그래프 준비 Node 40~60 ms, 기기 추정 0.3~0.6 s → 첫 화면 뒤 `InteractionManager.runAfterInteractions`):
+   ```ts
+   import { createDefaultMatcher } from './matcher';
+   import trustJson from './matcher/trust_mlp_v2.json';
+   const matcher = createDefaultMatcher(pkg, Platform.OS === 'ios' ? 'ios' : 'android', trustJson);
+   ```
+   (안드로이드만 믿음 모델을 쓰고 iOS 는 규칙 sigma. 합성 평가 결과에 따른 기본값.)
+3. 입력(좌표는 EPSG:5186 m, `t` 는 초, 같은 시계):
+   - 위치: `matcher.push({ type: 'fix', t, x, y, acc, speed, course })` (없으면 -1)
+   - 걸음: `matcher.push({ type: 'step', t, heading })` (걸음 1개마다, 도, 0 = 북, 시계방향)
+   - 기압: `matcher.push({ type: 'baro', t, h })` (상대 높이 m, 1 Hz 정도)
+4. 출력(push 마다): `{ x, y, z, floor, edgeKey, areaKey, buildingKey, state, lagged }`. 점은 `x, y` 를 그대로 그린다(이미 통로 위). `edgeKey`/`areaKey`/`buildingKey` 중 하나가 늘 채워진다(길 밖 상태 빼고). `lagged` 는 5초 늦은 더 정확한 값(기록용).
+5. **기압계 없는 기기**(일부 구형 Galaxy A): `baro` 를 안 보내면 된다. 사용자가 층을 고르면 `matcher.setFloor('f:북악관:6F')`(처음부터 알면 `createDefaultMatcher(pkg, p, trustJson, { userFloor })`). 그 건물 안에서는 고른 층만 쓴다. 층을 안 고르면 층은 길 그래프(계단·승강기 통과)로만 바뀐다.
+6. 선택: 출발지를 알면 `{ start: { x, y, z } }`, 자주 머무는 층을 알면 `{ floorPrior: { 'f:북악관:6F': 1 } }`(기압 기준을 아직 못 잡았을 때만 쓰임).
+7. 기기에서 속도 재기: `console.log('[bench]', JSON.stringify(benchmarkMatcher(pkg, {}, 600)))` → `adb logcat -s ReactNativeJS | findstr bench`.
+
+v2 에서 바뀐 것과 평가는 아래 "2차 결과" 절과 볼트 노트(백엔드/작업로그/2026-10-15-위치-보정-모델-1차.md 의 2차 절).
 
 서경대학교 길안내 앱(`C:\campus-client`)용. 규칙 HMM 길 맞춤을 뼈대로 두고, GPS 를 얼마나 믿을지(오차 크기)를 작은 신경망이 정한다.
 학습·평가는 **합성 자료**로만 했다. 실제 정답 동선은 아직 없다.

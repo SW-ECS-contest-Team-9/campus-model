@@ -9,7 +9,10 @@
     "typecheck": "tsc --noEmit",
     "eval": "tsx eval/evaluate.ts",
     "eval:real": "tsx eval/real.ts",
-    "bench": "tsx eval/bench.ts"
+    "bench": "tsx eval/bench.ts",
+    "eval:dwell": "tsx eval/dwell.ts",
+    "eval:s1014": "tsx eval/s1014.ts",
+    "bench:cmp": "tsx eval/benchcmp.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
