@@ -1,0 +1,109 @@
+{
+ "routes": 98,
+ "rows": [
+  {
+   "method": "raw GPS",
+   "median_m": 28.1,
+   "p90_m": 85,
+   "edge_rate": null,
+   "floor_rate": null,
+   "wall_jumps_per_1000": 54.8
+  },
+  {
+   "method": "PDR only (start known)",
+   "median_m": 24.3,
+   "p90_m": 61,
+   "edge_rate": null,
+   "floor_rate": 0.975,
+   "wall_jumps_per_1000": 0
+  },
+  {
+   "method": "v1 HMM+trust",
+   "median_m": 23,
+   "p90_m": 65.9,
+   "edge_rate": 0.142,
+   "floor_rate": 0.252,
+   "wall_jumps_per_1000": 1.9,
+   "on_network": 1,
+   "along_median_m": 41.7,
+   "along_p90_m": 174.3,
+   "switches_per_min": 11.6,
+   "true_switches_per_min": 3.41
+  },
+  {
+   "method": "v2 HMM",
+   "median_m": 16.3,
+   "p90_m": 70.3,
+   "edge_rate": 0.204,
+   "floor_rate": 0.442,
+   "wall_jumps_per_1000": 1.5,
+   "on_network": 0.997,
+   "along_median_m": 27.4,
+   "along_p90_m": 162.8,
+   "switches_per_min": 5.33,
+   "true_switches_per_min": 3.41
+  },
+  {
+   "method": "v2 HMM+trust_v2",
+   "median_m": 19.6,
+   "p90_m": 68.7,
+   "edge_rate": 0.189,
+   "floor_rate": 0.424,
+   "wall_jumps_per_1000": 1.3,
+   "on_network": 0.999,
+   "along_median_m": 34.9,
+   "along_p90_m": 175.9,
+   "switches_per_min": 4.81,
+   "true_switches_per_min": 3.41
+  },
+  {
+   "method": "v2 default (5s lag)",
+   "median_m": 16,
+   "p90_m": 69.6,
+   "edge_rate": 0.215,
+   "floor_rate": 0.448,
+   "wall_jumps_per_1000": 5.4,
+   "on_network": 0.997,
+   "along_median_m": 26.1,
+   "along_p90_m": 162.1,
+   "switches_per_min": 6.54,
+   "true_switches_per_min": 3.41
+  },
+  {
+   "method": "v2 default (start known)",
+   "median_m": 7.6,
+   "p90_m": 55.1,
+   "edge_rate": 0.322,
+   "floor_rate": 0.77,
+   "wall_jumps_per_1000": 1.6,
+   "on_network": 0.996,
+   "along_median_m": 9.5,
+   "along_p90_m": 114.4,
+   "switches_per_min": 5.97,
+   "true_switches_per_min": 3.41
+  }
+ ],
+ "dwell_bukak_6F": {
+  "v1 HMM+trust": {
+   "in_building": 0.571,
+   "on_6F": 0,
+   "on_network": 1
+  },
+  "v2 default": {
+   "in_building": 0.904,
+   "on_6F": 0.003,
+   "on_network": 1
+  },
+  "v2 default + floorPrior(6F)": {
+   "in_building": 0.983,
+   "on_6F": 0.978,
+   "on_network": 1
+  }
+ },
+ "latency": {
+  "method": "v2 HMM",
+  "median_ms": 0.703,
+  "p99_ms": 17.113,
+  "n": 55147
+ }
+}

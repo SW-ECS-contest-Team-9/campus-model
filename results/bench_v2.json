@@ -1,0 +1,6 @@
+{
+ "note": "Node(PC), 다른 작업으로 CPU 100% 상태라 측정 프로세스를 High 우선순위로 돌림. 한 위치당 ms.",
+ "synthetic_routes_60": {"v1": {"median_ms": 0.35, "p99_ms": 2.98, "max_ms": 33.4}, "v2": {"median_ms": 0.43, "p99_ms": 3.54, "max_ms": 33.3}},
+ "benchmarkMatcher_2000": {"v2_rule": {"buildMs": 42.0, "median_ms": 1.16, "p99_ms": 3.53, "max_ms": 10.0}, "v2_trust_v2": {"buildMs": 38.9, "median_ms": 1.24, "p99_ms": 3.84, "max_ms": 14.5}},
+ "heap_mb": 34.3, "trust_mlp_v2_json_bytes": 11779
+}

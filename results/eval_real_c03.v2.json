@@ -1,0 +1,42 @@
+{
+ "note": "실제 세션, 정답 없음, 집계값만.",
+ "inputs": {
+  "steps": true,
+  "baro": true
+ },
+ "pedometer_m": 1066,
+ "platform": "ios",
+ "raw GPS": {
+  "path_m": 3110,
+  "path_over_pedometer": 2.92,
+  "step_median_m": 3.4,
+  "step_p90_m": 26.7,
+  "jumps_over_20m": 43,
+  "on_network": 0,
+  "in_bare_building": 0,
+  "uncertain": 0,
+  "floor_sequence": ""
+ },
+ "v1 HMM+trust": {
+  "path_m": 1001,
+  "path_over_pedometer": 0.94,
+  "step_median_m": 0,
+  "step_p90_m": 0.7,
+  "jumps_over_20m": 0,
+  "on_network": 1,
+  "in_bare_building": 0,
+  "uncertain": 0.215,
+  "floor_sequence": ""
+ },
+ "v2 default": {
+  "path_m": 441,
+  "path_over_pedometer": 0.41,
+  "step_median_m": 0,
+  "step_p90_m": 0.6,
+  "jumps_over_20m": 1,
+  "on_network": 1,
+  "in_bare_building": 0,
+  "uncertain": 0.265,
+  "floor_sequence": "문예관:1F > 본관:2F > 본관:5F > 본관:2F"
+ }
+}
