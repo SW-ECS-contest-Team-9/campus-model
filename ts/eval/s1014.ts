@@ -33,20 +33,23 @@ function distFp(x: number, y: number) {
   return best;
 }
 
-// 기기별 기본값(createDefaultMatcher 와 같음) + 실험 옵션
-const methods: [string, (p: 'ios' | 'android') => MatcherOptions][] = [
-  ['v2 default', (p) => ({ platform: p, trust: p === 'android' ? trustV2 : null })],
-  ['v2 + floorPrior(6F)', (p) => ({ platform: p, trust: p === 'android' ? trustV2 : null, floorPrior: { [TARGET]: 1 } })],
+// v2(10-15 기본) / 지금 기본값(createDefaultMatcher 와 같음) / 앱이 층을 알려 줄 때. noBaro = 기압 대용 사건을 뺌.
+const def = (p: 'ios' | 'android'): MatcherOptions => ({ platform: p, trust: p === 'android' ? trustV2 : null, gpsAltMaxVacc: p === 'android' ? 3 : 0 });
+const methods: [string, (p: 'ios' | 'android') => MatcherOptions, boolean?][] = [
+  ['v2 (10-15)', (p) => ({ ...def(p), gpsAltMaxVacc: 0 })],
+  ['default', def],
+  ['default, no baro proxy', def, true],
+  ['default + floorPrior(6F)', (p) => ({ ...def(p), floorPrior: { [TARGET]: 1 } })],
 ];
 
 interface Per { file: string; platform: string; label: string; uncertain: boolean; n: number; inB: number; on6: number; flips: number; flipsPerMin: number; dRaw: number; dMatch: number }
 const out: Record<string, unknown> = {};
-for (const [name, opt] of methods) {
+for (const [name, opt, noBaro] of methods) {
   const per: Per[] = [];
   for (const f of files) {
     const lb = labels[f];
     if (!lb) continue;
-    const ev: SensorEvent[] = JSON.parse(readFileSync(join(dir, f), 'utf8'));
+    const ev: SensorEvent[] = JSON.parse(readFileSync(join(dir, f), 'utf8')).filter((e: SensorEvent) => !(noBaro && e.type === 'baro'));
     const m = createMatcher(g, opt(lb.platform));
     let n = 0, inB = 0, on6 = 0, flips = 0, prev: string | null | undefined;
     const dRaw: number[] = [], dMatch: number[] = [];

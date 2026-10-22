@@ -10,10 +10,11 @@ export { benchmarkMatcher } from './bench';
 /**
  * 앱에서 부르는 한 줄. 2차 기본값: 안드로이드는 믿음 모델(trust_mlp_v2.json)을 쓰고,
  * iOS 는 쓰지 않는다(합성 평가에서 iOS 는 믿음 모델이 길 위 지표를 나쁘게 함).
+ * GPS 높이(fix.alt, 정표고)는 안드로이드만 절대 높이로 쓴다(10-14 실측: 안드로이드 실내 수직 오차 약 1 m, iPhone 20~35 m).
  */
 export function createDefaultMatcher(
   pkg: MapPackage | Graph, platform: 'ios' | 'android', trustJson: TrustModelJson | null, options: MatcherOptions = {},
 ) {
   const trust = platform === 'android' && trustJson ? loadTrustModel(trustJson) : null;
-  return createMatcher(pkg, { platform, trust, ...options });
+  return createMatcher(pkg, { platform, trust, gpsAltMaxVacc: platform === 'android' ? 3 : 0, ...options });
 }

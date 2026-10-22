@@ -175,6 +175,20 @@ describe('2차: 절대 높이·승강기·기압계 없음', () => {
     expect(r!.floor).toBe('f:h:5F');
   });
 
+  it('GPS 높이(수직 정확도 좋음)로 겹친 층 중 맞는 층을 고른다(안드로이드)', () => {
+    const run = (opts: object, vacc: number) => {
+      const m = createMatcher(twoFloors(), opts);
+      let r = null;
+      for (let k = 0; k < 20; k++) {
+        r = m.push({ type: 'baro', t: k, h: 0.1 * Math.sin(k) });
+        r = m.push({ type: 'fix', t: k + 0.5, x: 50 + Math.sin(k), y: 3, acc: 30, alt: 4.6, vacc });
+      }
+      return r!.floor;
+    };
+    expect(run({ gpsAltMaxVacc: 3 }, 1.5)).toBe('f2');
+    expect(run({}, 1.5)).toBe(run({ gpsAltMaxVacc: 3 }, 10)); // 꺼져 있거나 수직 정확도가 나쁘면 무시
+  });
+
   it('출력은 늘 길 위(길 밖 상태는 좋은 GPS 가 길에서 멀리 오래 있을 때만)', () => {
     const m = createMatcher(twoFloors());
     // 길에서 30 m 떨어진 좋은 GPS 5개: 아직 길로 끌어당긴다

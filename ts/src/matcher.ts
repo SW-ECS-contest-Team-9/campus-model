@@ -5,7 +5,8 @@ import { FeatureState } from './features';
 import type { TrustModel } from './trust';
 
 export type SensorEvent =
-  | { type: 'fix'; t: number; x: number; y: number; acc: number; speed?: number; course?: number }
+  // alt = GPS 높이(정표고 m, 지도 z 와 같은 기준), vacc = 수직 정확도(m). 없으면 생략.
+  | { type: 'fix'; t: number; x: number; y: number; acc: number; speed?: number; course?: number; alt?: number; vacc?: number }
   | { type: 'step'; t: number; heading: number } // 도, 0 = 북, 90 = 동
   | { type: 'baro'; t: number; h: number }; // 기압 상대 높이(m)
 
@@ -59,6 +60,8 @@ export interface MatcherOptions {
   userFloor?: string | null;
   /** 실내 길이 없는 건물(예: 한림관)도 상태로 둔다. 사전 점수(log)는 bareBuildingPrior. */
   bareBuildings?: boolean; bareBuildingPrior?: number;
+  /** GPS 높이를 절대 높이 증거로 쓰는 수직 정확도 상한(m). 0 이면 끔. 10-14 실측: 안드로이드(S21)는 실내에서도 vacc 1~2 m·층 높이와 1 m 안, iPhone 은 vacc 3~6 m 여도 20~35 m 틀려 끔. */
+  gpsAltMaxVacc?: number;
 }
 
 const enum K { Edge = 0, Area = 1, Off = 2, Bldg = 3 }
@@ -72,7 +75,7 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
   const o = {
     trust: null as TrustModel | null, strideM: 0.7, lagS: 5, maxCandidates: 60, sigmaMin: 5, sigmaMax: 50,
     radiusMin: 25, radiusMax: 120, offNetwork: true, emissionWeight: 0.3, platform: 'ios' as 'ios' | 'android', start: null as { x: number; y: number; z: number } | null,
-    anchor: true, anchorSigma: 1.0, anchorCap: 8, anchorMaxSigma: 10, anchorFootprintM: 8, anchorReject: 3, anchorAgree: 1.5, pdrVector: true, pdrVecSd: 2, offSustain: 10, switchPenalty: 0, trustGate: false, indoorPull: 1, floorPrior: null as Record<string, number> | null, userFloor: null as string | null, bareBuildings: true, bareBuildingPrior: -1, ...options,
+    anchor: true, anchorSigma: 1.0, anchorCap: 8, anchorMaxSigma: 10, anchorFootprintM: 8, anchorReject: 3, anchorAgree: 1.5, pdrVector: true, pdrVecSd: 2, offSustain: 10, switchPenalty: 0, trustGate: false, indoorPull: 1, floorPrior: null as Record<string, number> | null, userFloor: null as string | null, bareBuildings: true, bareBuildingPrior: -1, gpsAltMaxVacc: 0, ...options,
   };
   const feats = new FeatureState(g, o.platform);
   const cols: Col[] = [];
@@ -220,7 +223,7 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
     Math.log((1 - EPS) * Math.exp((-d * d) / (2 * sigma * sigma)) / (sigma * sigma) + EPS / OUT2);
   const prior = (c: Cand) => (c.k === K.Off ? -3 : c.k === K.Area ? -3 : c.k === K.Bldg ? o.bareBuildingPrior : 0);
 
-  const update = (t: number, x: number, y: number, sigma: number, pseudo: boolean) => {
+  const update = (t: number, x: number, y: number, sigma: number, pseudo: boolean, gpsZ = NaN, gpsZSd = 1) => {
     const prev = cols[cols.length - 1];
     const dB = baroNow - baroAtUpd;
     const zPred = last && baroSeen ? last.z + dB : null;
@@ -240,10 +243,13 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
     const pdr = pdrSteps * o.strideM;
     const dt = prev ? t - prev.t : 0;
     let reset = !prev;
-    const zAbs = o.anchor && baroSeen && offN > 0 ? baroNow + off : NaN;
+    // 절대 높이: 믿을 만한 GPS 높이가 있으면 그것, 없으면 기압 + 영점
+    const gpsAbs = isFinite(gpsZ);
+    const zAbs = gpsAbs ? gpsZ : o.anchor && baroSeen && offN > 0 ? baroNow + off : NaN;
+    const zSd = gpsAbs ? Math.max(o.anchorSigma, gpsZSd) : o.anchorSigma;
     for (let j = 0; j < c.length; j++) {
       let em = (pseudo ? 1 : o.emissionWeight) * emission(c[j].d, sigma) + prior(c[j]);
-      if (c[j].k !== K.Off && isFinite(zAbs) && isFinite(c[j].z)) em -= Math.min(o.anchorCap, (c[j].z - zAbs) ** 2 / (2 * o.anchorSigma ** 2));
+      if (c[j].k !== K.Off && isFinite(zAbs) && isFinite(c[j].z)) em -= Math.min(o.anchorCap, (c[j].z - zAbs) ** 2 / (2 * zSd ** 2));
       if (o.indoorPull || o.floorPrior) {
         const fk = floorOf(c[j]);
         // GPS 가 나쁠수록(실내 꼴) 건물 안 길 쪽으로 끌어당김
@@ -300,6 +306,7 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
         if (j !== bi && col.s[j] > -3 && Math.hypot(c[j].x - bc.x, c[j].y - bc.y) > 15) ok = false;
       if (ok) anchorSample(bc.z - baroNow);
     }
+    if (gpsAbs && baroSeen) anchorSample(gpsZ - baroNow); // GPS 높이로 기압 영점도 잡는다(GPS 없는 구간용)
     while (cols.length > 2 && cols[1].t < t - o.lagS - 1) cols.shift();
     pdrX = pdrY = 0; pdrSteps = 0; baroAtUpd = baroNow; lastUpdT = t;
   };
@@ -370,7 +377,8 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
       const sigma = Math.max(o.sigmaMin, Math.min(o.sigmaMax, raw));
       lastSigma = sigma;
       lastFixT = ev.t;
-      update(ev.t, ev.x, ev.y, sigma, false);
+      const altOk = o.gpsAltMaxVacc > 0 && ev.alt !== undefined && ev.vacc !== undefined && ev.vacc > 0 && ev.vacc <= o.gpsAltMaxVacc;
+      update(ev.t, ev.x, ev.y, sigma, false, altOk ? ev.alt! : NaN, altOk ? ev.vacc! : 1);
     }
     const r = result(ev.t);
     if (r) last = r;
