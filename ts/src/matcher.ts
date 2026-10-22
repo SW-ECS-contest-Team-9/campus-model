@@ -253,7 +253,9 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
       if (o.indoorPull || o.floorPrior) {
         const fk = floorOf(c[j]);
         // GPS 가 나쁠수록(실내 꼴) 건물 안 길 쪽으로 끌어당김
-        if (fk && o.indoorPull && !pseudo) em += o.indoorPull * Math.max(0, Math.min(1, (sigma - 10) / 20));
+        // 문 길(한쪽 끝이 바깥)은 건물 안이 아니므로 끌어당기지 않는다(10-14: iPhone 이 북악관 앞 본관 2F 문 길에 붙음)
+        const door = c[j].k === K.Edge && g.nodes[g.edges[c[j].e].from].outdoor !== g.nodes[g.edges[c[j].e].to].outdoor;
+        if (fk && o.indoorPull && !pseudo && !door) em += o.indoorPull * Math.max(0, Math.min(1, (sigma - 10) / 20));
         if (fk && o.floorPrior && !(isFinite(zAbs))) em += o.floorPrior[fk] ?? 0;
       }
       if (!prev) {

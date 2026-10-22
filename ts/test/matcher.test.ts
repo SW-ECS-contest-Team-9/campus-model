@@ -189,6 +189,16 @@ describe('2차: 절대 높이·승강기·기압계 없음', () => {
     expect(run({}, 1.5)).toBe(run({ gpsAltMaxVacc: 3 }, 10)); // 꺼져 있거나 수직 정확도가 나쁘면 무시
   });
 
+  it('GPS 가 나쁠 때 끌어당기는 쪽은 건물 안 길이고, 바깥과 잇는 문 길은 아니다', () => {
+    // 언덕 건물: 문 길(door, x=-10..0)에 GPS 가 찍혀도(정확도 30 m) 건물 안 복도(x>=0)로 끌린다
+    const pkg = hillBuilding();
+    pkg.edges = pkg.edges.map((e) => (e.key === 'door' ? edge('door', 'a2', 'o1', 'corridor', [[0, 0, 10], [-10, 0, 10]]) : e)); // 안쪽 끝이 from(실제 본관 2F 문 길과 같은 꼴)
+    const m = createMatcher(pkg, { offNetwork: false });
+    let r = null;
+    for (let k = 0; k < 15; k++) r = m.push({ type: 'fix', t: k, x: -6, y: 6, acc: 30 });
+    expect(['c2a', 'c1a']).toContain(r!.edgeKey);
+  });
+
   it('출력은 늘 길 위(길 밖 상태는 좋은 GPS 가 길에서 멀리 오래 있을 때만)', () => {
     const m = createMatcher(twoFloors());
     // 길에서 30 m 떨어진 좋은 GPS 5개: 아직 길로 끌어당긴다
