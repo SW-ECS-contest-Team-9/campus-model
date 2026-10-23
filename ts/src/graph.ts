@@ -12,7 +12,13 @@ export interface MapPackage {
   }[];
   walkAreas: { key: string; floorKey: string | null; polygon: [number, number][]; z: number | null }[];
   walkAreaNodes: { areaKey: string; nodeKey: string }[];
+  /** 걷는 면(꾸러미 v13~): 기단 윗면을 사람이 다니는 곳 외곽으로 자른 것. polygons = [[바깥 고리, 구멍 고리...], ...]. */
+  walkSurfaces?: { key: string; top: SurfaceTop; polygons: [number, number][][][] }[];
+  walkSurfaceNodes?: { surfaceKey: string; nodeKey: string }[];
 }
+
+/** 면 높이: 평면 {z} 또는 한 방향 기울기 {profile: origin 에서 direction 쪽 거리마다 높이(사이 직선, 끝 밖은 끝 높이)}. */
+export type SurfaceTop = { z: number } | { profile: { origin: [number, number]; direction: [number, number]; points: [number, number][] } };
 
 export interface GEdge {
   key: string; i: number; from: number; to: number; kind: string;
@@ -22,7 +28,11 @@ export interface GEdge {
 
 export interface GNode { key: string; x: number; y: number; z: number; outdoor: boolean; floorKey: string | null }
 
-export interface GArea { key: string; poly: [number, number][]; z: number | null; floorKey: string | null; nodes: number[] }
+export interface GArea {
+  key: string; poly: [number, number][]; z: number | null; floorKey: string | null; nodes: number[];
+  /** 걷는 면이면 윗면(높이는 자리마다)·구멍. 걷는 면은 길과 같은 급(길 선으로 끌지 않음). */
+  top?: SurfaceTop; holes?: [number, number][][];
+}
 
 export interface Graph {
   nodes: GNode[];
@@ -92,7 +102,22 @@ export function buildGraph(pkg: MapPackage): Graph {
     const k = idx.get(wn.nodeKey);
     if (k !== undefined) (areaNodes.get(wn.areaKey) ?? areaNodes.set(wn.areaKey, []).get(wn.areaKey)!).push(k);
   }
-  const areas = pkg.walkAreas.map((a) => ({ key: a.key, poly: a.polygon, z: a.z, floorKey: a.floorKey, nodes: areaNodes.get(a.key) ?? [] }));
+  const areas: GArea[] = pkg.walkAreas.map((a) => ({ key: a.key, poly: a.polygon, z: a.z, floorKey: a.floorKey, nodes: areaNodes.get(a.key) ?? [] }));
+  const surfNodes = new Map<string, number[]>();
+  for (const wn of pkg.walkSurfaceNodes ?? []) {
+    const k = idx.get(wn.nodeKey);
+    if (k !== undefined) (surfNodes.get(wn.surfaceKey) ?? surfNodes.set(wn.surfaceKey, []).get(wn.surfaceKey)!).push(k);
+  }
+  // 면 조각마다 하나의 영역(같은 키). 면 노드는 가장 가까운 조각에 붙인다.
+  for (const s of pkg.walkSurfaces ?? []) {
+    const parts: GArea[] = s.polygons.map(([outer, ...holes]) => ({ key: s.key, poly: outer, z: null, floorKey: null, nodes: [], top: s.top, holes }));
+    for (const i of surfNodes.get(s.key) ?? []) {
+      let best = parts[0];
+      for (const a of parts) if (polyDist(a.poly, nodes[i].x, nodes[i].y) < polyDist(best.poly, nodes[i].x, nodes[i].y)) best = a;
+      best?.nodes.push(i);
+    }
+    areas.push(...parts);
+  }
   const grid = new Map<string, number[]>();
   for (const e of edges) {
     for (let gx = Math.floor(e.minx / CELL); gx <= Math.floor(e.maxx / CELL); gx++)
@@ -181,6 +206,24 @@ export function polyDist(poly: [number, number][], x: number, y: number): number
     best = Math.min(best, Math.hypot(x - ax - dx * t, y - ay - dy * t));
   }
   return best;
+}
+
+/** 면 높이(백엔드 mapdata/surfaces.surface_z 와 같음). */
+export function surfaceZ(top: SurfaceTop, x: number, y: number): number {
+  if ('z' in top) return top.z;
+  const { origin: [ox, oy], direction: [dx, dy], points: pts } = top.profile;
+  const d = ((x - ox) * dx + (y - oy) * dy) / (Math.hypot(dx, dy) || 1);
+  if (d <= pts[0][0]) return pts[0][1];
+  for (let i = 1; i < pts.length; i++) {
+    const [d0, h0] = pts[i - 1], [d1, h1] = pts[i];
+    if (d <= d1) return d1 > d0 ? h0 + ((h1 - h0) * (d - d0)) / (d1 - d0) : h1;
+  }
+  return pts[pts.length - 1][1];
+}
+
+/** 영역 안인가(걷는 면은 구멍 밖이어야 함). */
+export function inArea(a: GArea, x: number, y: number): boolean {
+  return pointInPoly(x, y, a.poly) && !(a.holes ?? []).some((h) => pointInPoly(x, y, h));
 }
 
 /** 점에서 가장 가까운 건물 외곽선까지 거리(안이면 0). */

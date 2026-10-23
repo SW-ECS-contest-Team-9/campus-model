@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createMatcher, type SensorEvent } from '../src/matcher';
 import { FeatureState } from '../src/features';
 import { loadTrustModel } from '../src/trust';
-import type { MapPackage } from '../src/graph';
+import type { MapPackage, SurfaceTop } from '../src/graph';
 
 const edge = (key: string, from: string, to: string, kind: string, geometry: [number, number, number][], direction: 'both' | 'forward' = 'both') => {
   let len = 0;
@@ -260,6 +260,51 @@ describe('2차: 절대 높이·승강기·기압계 없음', () => {
     };
     expect(run(3)).toBe('f2');
     expect(run(25)).toBe('f1'); // 외곽선 밖: 사전 점수 없음(겹친 층 중 첫 후보)
+  });
+
+  describe('걷는 면(walkSurfaces, 꾸러미 v13)', () => {
+    // 광장 면(0..60 × 0..40, 가운데 구멍 25..35 × 15..25)의 남쪽 가장자리 y=0 에 길. 면 노드 = 길 양 끝.
+    const out = (key: string, x: number, y: number, z: number) => ({ key, location: 'outdoor' as const, floorKey: null, x, y, z });
+    const plaza = (top: SurfaceTop): MapPackage => ({
+      buildings: [], floors: [],
+      nodes: [out('r0', 0, 0, 10), out('r1', 60, 0, 10)],
+      edges: [edge('road', 'r0', 'r1', 'walkway', [[0, 0, 10], [60, 0, 10]])],
+      walkAreas: [], walkAreaNodes: [],
+      walkSurfaces: [{ key: 's:광장', top, polygons: [[[[0, 0], [60, 0], [60, 40], [0, 40]], [[25, 15], [35, 15], [35, 25], [25, 25]]]] }],
+      walkSurfaceNodes: [{ surfaceKey: 's:광장', nodeKey: 'r0' }, { surfaceKey: 's:광장', nodeKey: 'r1' }],
+    });
+    const run = (pkg: MapPackage, y: number, opts: object = {}) => {
+      const m = createMatcher(pkg, { offNetwork: false, ...opts });
+      let r = null;
+      for (const ev of walk(10, 50, 0, y, () => 0, 10)) r = m.push(ev) ?? r;
+      return r!;
+    };
+
+    it('면 위 GPS 는 면에 둔다(가장 가까운 길 선으로 끌지 않음), 끄면 예전처럼 길로', () => {
+      const r = run(plaza({ z: 10 }), 32);
+      expect(r.edgeKey).toBeNull();
+      expect(r.areaKey).toBe('s:광장');
+      expect(r.y).toBeCloseTo(32, 0);
+      expect(r.z).toBeCloseTo(10, 1);
+      expect(run(plaza({ z: 10 }), 32, { walkSurfaces: false }).edgeKey).toBe('road');
+    });
+
+    it('기울어진 면은 profile 높이를 쓰고, 구멍(면 위로 솟은 것) 안은 면이 아니다', () => {
+      // 북쪽(y)으로 갈수록 오름: y=0 → 10 m, y=40 → 14 m
+      const sloped = plaza({ profile: { origin: [0, 0], direction: [0, 1], points: [[0, 10], [40, 14]] } });
+      const r = run(sloped, 30);
+      expect(r.areaKey).toBe('s:광장');
+      expect(r.z).toBeCloseTo(13, 0);
+      // 구멍 줄(y=20)을 지나는 동안: 구멍 안 x(25..35)에서는 면 후보가 없다
+      const m = createMatcher(sloped, { offNetwork: false });
+      const inHole: (string | null)[] = [];
+      for (const ev of walk(10, 50, 0, 20, () => 0, 10)) {
+        const res = m.push(ev);
+        if (res && ev.type === 'fix' && ev.x > 26 && ev.x < 34) inHole.push(res.areaKey);
+      }
+      expect(inHole.length).toBeGreaterThan(0);
+      expect(inHole.every((k) => k === null)).toBe(true);
+    });
   });
 
   it('출력은 늘 길 위(길 밖 상태는 좋은 GPS 가 길에서 멀리 오래 있을 때만)', () => {

@@ -1,6 +1,6 @@
 // 기기 안 길 맞춤(HMM, 고정 지연 Viterbi). 상태 = 길 위 점 / 보행 면 / 길 밖(바깥 열린 곳).
 // 층은 길 그래프로만 바뀐다(계단·승강기·경사로 길을 지나야 함). 기압은 층에 대한 부드러운 증거.
-import { buildGraph, edgesNear, footprintDist, inAnyFootprint, pointAt, pointInPoly, polyDist, project, type Graph, type MapPackage } from './graph';
+import { buildGraph, edgesNear, footprintDist, inAnyFootprint, inArea, pointAt, pointInPoly, polyDist, project, surfaceZ, type Graph, type MapPackage } from './graph';
 import { FeatureState } from './features';
 import type { TrustModel } from './trust';
 
@@ -68,6 +68,8 @@ export interface MatcherOptions {
   undergroundM?: number;
   /** floorPrior 는 GPS 가 그 층 건물 외곽선에서 이 거리(m) 안일 때만 쓴다(0 = 안일 때만). 이동 중 다른 곳에서 그 층으로 끌리지 않게(10-14 평가). */
   floorPriorMarginM?: number;
+  /** 꾸러미 걷는 면(walkSurfaces) 사용. 면 위 GPS 는 길 선으로 끌지 않고 면에 둔다(면 = 길과 같은 급). 기본 켬. */
+  walkSurfaces?: boolean;
 }
 
 const enum K { Edge = 0, Area = 1, Off = 2, Bldg = 3 }
@@ -81,7 +83,7 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
   const o = {
     trust: null as TrustModel | null, strideM: 0.7, lagS: 5, maxCandidates: 60, sigmaMin: 5, sigmaMax: 50,
     radiusMin: 25, radiusMax: 120, offNetwork: true, emissionWeight: 0.3, platform: 'ios' as 'ios' | 'android', start: null as { x: number; y: number; z: number } | null,
-    anchor: true, anchorSigma: 1.0, anchorCap: 8, anchorMaxSigma: 10, anchorFootprintM: 8, anchorReject: 3, anchorAgree: 1.5, pdrVector: true, pdrVecSd: 2, offSustain: 10, switchPenalty: 0, trustGate: false, indoorPull: 1, floorPrior: null as Record<string, number> | null, userFloor: null as string | null, bareBuildings: true, bareBuildingPrior: -1, gpsAltMaxVacc: 0, gpsDistrust: null as Record<string, number> | null, gpsDistrustM: 15, undergroundM: 4, floorPriorMarginM: 0, ...options,
+    anchor: true, anchorSigma: 1.0, anchorCap: 8, anchorMaxSigma: 10, anchorFootprintM: 8, anchorReject: 3, anchorAgree: 1.5, pdrVector: true, pdrVecSd: 2, offSustain: 10, switchPenalty: 0, trustGate: false, indoorPull: 1, floorPrior: null as Record<string, number> | null, userFloor: null as string | null, bareBuildings: true, bareBuildingPrior: -1, gpsAltMaxVacc: 0, gpsDistrust: null as Record<string, number> | null, gpsDistrustM: 15, undergroundM: 4, floorPriorMarginM: 0, walkSurfaces: true, ...options,
   };
   const feats = new FeatureState(g, o.platform);
   const cols: Col[] = [];
@@ -149,13 +151,16 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
     return c.en;
   };
 
+  // 다른 걷는 면(조각) 사이는 벽이라 곧장 못 간다(면 노드로 돌아감)
+  const crossSurface = (a: Cand, b: Cand) =>
+    a.k === K.Area && b.k === K.Area && a.e !== b.e && !!(g.areas[a.e].top || g.areas[b.e].top);
   const netDist = (a: Cand, b: Cand): number => {
     let best = Infinity;
     if (a.k === K.Edge && b.k === K.Edge && a.e === b.e) {
       const e = g.edges[a.e];
       if (b.f >= a.f && e.fwd) best = (b.f - a.f) * e.len;
       if (a.f >= b.f && e.back) best = Math.min(best, (a.f - b.f) * e.len);
-    } else if ((a.k !== K.Edge && b.k !== K.Edge) || a.k === K.Bldg || b.k === K.Bldg) {
+    } else if ((a.k !== K.Edge && b.k !== K.Edge && !crossSurface(a, b)) || a.k === K.Bldg || b.k === K.Bldg) {
       // 실내 길 없는 건물은 문이 모델에 없으므로 바로 옆 길에서 곧장 들어간다고 본다
       best = Math.hypot(a.x - b.x, a.y - b.y);
       if (a.k === K.Bldg || b.k === K.Bldg) return best;
@@ -212,8 +217,10 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
     out.length = Math.min(out.length, o.maxCandidates);
     const zFree = zPred ?? (last ? last.z : NaN);
     g.areas.forEach((a, ai) => {
-      const cand: Cand = { k: K.Area, e: ai, f: 0, x, y, z: a.z ?? zFree, d: 0 };
-      if (pointInPoly(x, y, a.poly) && !aboveGround(cand, zU)) out.push(cand);
+      if (a.top && !o.walkSurfaces) return;
+      if (!inArea(a, x, y)) return;
+      const cand: Cand = { k: K.Area, e: ai, f: 0, x, y, z: a.top ? surfaceZ(a.top, x, y) : a.z ?? zFree, d: 0 };
+      if (!aboveGround(cand, zU)) out.push(cand);
     });
     // 실내 길이 없는 건물: 관측이 외곽선 안이면 건물 자체를 상태로 둔다(높이는 기압으로 이어 감 → 층)
     if (o.bareBuildings) {
@@ -231,7 +238,7 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
 
   const emission = (d: number, sigma: number) =>
     Math.log((1 - EPS) * Math.exp((-d * d) / (2 * sigma * sigma)) / (sigma * sigma) + EPS / OUT2);
-  const prior = (c: Cand) => (c.k === K.Off ? -3 : c.k === K.Area ? -3 : c.k === K.Bldg ? o.bareBuildingPrior : 0);
+  const prior = (c: Cand) => (c.k === K.Off ? -3 : c.k === K.Area ? (g.areas[c.e].top ? 0 : -3) : c.k === K.Bldg ? o.bareBuildingPrior : 0);
 
   const update = (t: number, x: number, y: number, sigma: number, pseudo: boolean, gpsZ = NaN, gpsZSd = 1) => {
     const prev = cols[cols.length - 1];
@@ -341,6 +348,7 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
 
   const advance = (c: Cand): [number, number, number] => {
     const dB = baroNow - baroAtUpd;
+    if (c.k === K.Area && g.areas[c.e].top) return [c.x + pdrX, c.y + pdrY, surfaceZ(g.areas[c.e].top!, c.x + pdrX, c.y + pdrY)];
     if (c.k !== K.Edge) return [c.x + pdrX, c.y + pdrY, c.z + dB];
     const e = g.edges[c.e];
     if (e.vertical || (pdrX === 0 && pdrY === 0)) return [c.x, c.y, c.z];
