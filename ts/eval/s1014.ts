@@ -46,6 +46,8 @@ const methods: [string, (p: 'ios' | 'android') => MatcherOptions, boolean?][] = 
   ['10-22 + floorPrior(6F, anywhere)', (p) => ({ ...def22(p), floorPrior: { [TARGET]: 1 } })],
   ...scales.map((k): [string, (p: 'ios' | 'android') => MatcherOptions] => [`default (Bukak sigma x${k})`, (p) => def(p, k)]),
   ['default, no baro proxy', (p) => def(p), true],
+  ['default, walkSurfaces off', (p) => ({ ...def(p), walkSurfaces: false })],
+  ['default, underground off', (p) => ({ ...def(p), undergroundM: 0 })],
   ['default + floorPrior(6F, inside footprint)', (p) => ({ ...def(p), floorPrior: { [TARGET]: 1 } })],
   ['default + floorPrior(6F, within 15 m)', (p) => ({ ...def(p), floorPrior: { [TARGET]: 1 }, floorPriorMarginM: 15 })],
 ];
