@@ -199,6 +199,69 @@ describe('2차: 절대 높이·승강기·기압계 없음', () => {
     expect(['c2a', 'c1a']).toContain(r!.edgeKey);
   });
 
+  it('GPS 를 덜 믿는 건물(북악관 꼴) 근처에서는 sigma 를 키워 건물 안으로 끌린다', () => {
+    // 건물(0..40 × 0..40) 안 복도 y=20, 바깥 길 y=48. GPS 는 외곽선 2 m 밖(y=42), 정확도 10 m.
+    const out = (key: string, x: number) => ({ key, location: 'outdoor' as const, floorKey: null, x, y: 48, z: 0 });
+    const pkg: MapPackage = {
+      buildings: [{ key: 'b:두꺼운벽', footprint: [[0, 0], [40, 0], [40, 40], [0, 40]] }],
+      floors: [{ key: 'f:두꺼운벽:1F', buildingKey: 'b:두꺼운벽', floorZ: 0 }],
+      nodes: [out('o0', -20), out('o1', 60), node('i0', 5, 20, 0, 'f:두꺼운벽:1F'), node('i1', 35, 20, 0, 'f:두꺼운벽:1F')],
+      edges: [edge('road', 'o0', 'o1', 'walkway', [[-20, 48, 0], [60, 48, 0]]), edge('hall', 'i0', 'i1', 'corridor', [[5, 20, 0], [35, 20, 0]])],
+      walkAreas: [], walkAreaNodes: [],
+    };
+    const run = (opts: object, y = 42) => {
+      const m = createMatcher(pkg, { offNetwork: false, ...opts });
+      let r = null;
+      for (let k = 0; k < 15; k++) r = m.push({ type: 'fix', t: k, x: 20, y, acc: 10 });
+      return r!.edgeKey;
+    };
+    expect(run({})).toBe('road');
+    expect(run({ gpsDistrust: { 'b:두꺼운벽': 3 } })).toBe('hall');
+    expect(run({ gpsDistrust: { '다른 건물': 3 } })).toBe('road'); // 건물별 설정
+    expect(run({ gpsDistrust: { 'b:두꺼운벽': 3 }, gpsDistrustM: 1 })).toBe('road'); // 외곽선에서 거리 한계 밖
+  });
+
+  it('절대 높이가 지하를 가리키면 지상 길에 붙이지 않는다(지하 길이 있으면 그쪽, 없으면 길 밖)', () => {
+    // 지상 길 z=150(y=0), 지하 주차장 길 z=143.5(y=50 또는 아주 멀리). GPS 는 지상 길 위(지하에서 GPS 가 지상처럼 찍힘).
+    const pkgFor = (parkY: number): MapPackage => {
+      const n = (key: string, x: number, y: number, z: number) => ({ key, location: 'outdoor' as const, floorKey: null, x, y, z });
+      return {
+        buildings: [], floors: [],
+        nodes: [n('s0', 0, 0, 150), n('s1', 100, 0, 150), n('p0', 0, parkY, 143.5), n('p1', 100, parkY, 143.5)],
+        edges: [edge('surface', 's0', 's1', 'walkway', [[0, 0, 150], [100, 0, 150]]), edge('park', 'p0', 'p1', 'walkway', [[0, parkY, 143.5], [100, parkY, 143.5]])],
+        walkAreas: [], walkAreaNodes: [],
+      };
+    };
+    const run = (parkY: number, alt: number, opts: object = {}) => {
+      const m = createMatcher(pkgFor(parkY), { gpsAltMaxVacc: 3, offNetwork: false, ...opts });
+      let r = null;
+      for (let k = 0; k < 15; k++) {
+        r = m.push({ type: 'baro', t: k, h: 0 });
+        r = m.push({ type: 'fix', t: k + 0.5, x: 30 + k, y: 1, acc: 8, alt, vacc: 1.5 });
+      }
+      return r!;
+    };
+    expect(run(50, 149.8).edgeKey).toBe('surface'); // 지상이면 그대로
+    expect(run(50, 143.6).edgeKey).toBe('park');
+    const far = run(1000, 143.6);
+    expect(far.edgeKey).toBeNull();
+    expect(far.z).toBeCloseTo(143.6, 0);
+    expect(run(1000, 143.6, { undergroundM: 0 }).edgeKey).toBe('surface'); // 끄면 예전처럼
+  });
+
+  it('층 사전 점수(floorPrior)는 GPS 가 그 건물 외곽선 안일 때만 쓴다', () => {
+    const pkg = twoFloors();
+    pkg.buildings = [{ key: 'b', footprint: [[-5, -10], [105, -10], [105, 10], [-5, 10]] }];
+    const run = (y: number) => {
+      const m = createMatcher(pkg, { floorPrior: { f2: 1 }, offNetwork: false });
+      let r = null;
+      for (let k = 0; k < 15; k++) r = m.push({ type: 'fix', t: k, x: 50, y, acc: 30 });
+      return r!.floor;
+    };
+    expect(run(3)).toBe('f2');
+    expect(run(25)).toBe('f1'); // 외곽선 밖: 사전 점수 없음(겹친 층 중 첫 후보)
+  });
+
   it('출력은 늘 길 위(길 밖 상태는 좋은 GPS 가 길에서 멀리 오래 있을 때만)', () => {
     const m = createMatcher(twoFloors());
     // 길에서 30 m 떨어진 좋은 GPS 5개: 아직 길로 끌어당긴다

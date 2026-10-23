@@ -32,6 +32,10 @@ export interface Graph {
   dist: Float64Array; // n*n, dist[a*n+b] = a→b
   n: number;
   footprints: [number, number][][];
+  /** 외곽선이 있는 건물(키와 함께). 건물별 GPS 믿음·층 사전 점수 조건에 쓴다. */
+  buildingPolys: { key: string; poly: [number, number][] }[];
+  /** 층 키 → 건물 키. */
+  floorBuilding: Map<string, string>;
   /** 실내 길이 하나도 없는 건물(외곽선·층 높이만 있음). 길 대신 건물 자체로 끌어당긴다. */
   bareBuildings: { key: string; poly: [number, number][]; floors: { key: string; z: number }[] }[];
   cell: number;
@@ -101,6 +105,8 @@ export function buildGraph(pkg: MapPackage): Graph {
     nodes, edges, areas, n, dist, grid, cell: CELL,
     outdoorNodes: nodes.map((nd, i) => (nd.outdoor ? i : -1)).filter((i) => i >= 0),
     footprints: pkg.buildings.filter((b) => b.footprint).map((b) => b.footprint!),
+    buildingPolys: pkg.buildings.filter((b) => b.footprint).map((b) => ({ key: b.key, poly: b.footprint! })),
+    floorBuilding: new Map(pkg.floors.map((f) => [f.key, f.buildingKey])),
     bareBuildings: pkg.buildings
       .filter((b) => b.footprint && !pkg.nodes.some((n) => n.location === 'indoor' && n.floorKey && (pkg.floors.find((f) => f.key === n.floorKey)?.buildingKey === b.key)))
       .map((b) => ({ key: b.key, poly: b.footprint!, floors: pkg.floors.filter((f) => f.buildingKey === b.key && f.floorZ !== null).map((f) => ({ key: f.key, z: f.floorZ! })) }))
@@ -164,18 +170,23 @@ export function inAnyFootprint(g: { footprints: [number, number][][] }, x: numbe
   return g.footprints.some((fp) => pointInPoly(x, y, fp));
 }
 
+/** 점에서 다각형 외곽선까지 거리(안이면 0). */
+export function polyDist(poly: [number, number][], x: number, y: number): number {
+  if (pointInPoly(x, y, poly)) return 0;
+  let best = Infinity;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [ax, ay] = poly[j], [bx, by] = poly[i];
+    const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+    const t = L2 > 0 ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / L2)) : 0;
+    best = Math.min(best, Math.hypot(x - ax - dx * t, y - ay - dy * t));
+  }
+  return best;
+}
+
 /** 점에서 가장 가까운 건물 외곽선까지 거리(안이면 0). */
 export function footprintDist(g: { footprints: [number, number][][] }, x: number, y: number): number {
   let best = Infinity;
-  for (const fp of g.footprints) {
-    if (pointInPoly(x, y, fp)) return 0;
-    for (let i = 0, j = fp.length - 1; i < fp.length; j = i++) {
-      const [ax, ay] = fp[j], [bx, by] = fp[i];
-      const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
-      const t = L2 > 0 ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / L2)) : 0;
-      best = Math.min(best, Math.hypot(x - ax - dx * t, y - ay - dy * t));
-    }
-  }
+  for (const fp of g.footprints) best = Math.min(best, polyDist(fp, x, y));
   return best;
 }
 

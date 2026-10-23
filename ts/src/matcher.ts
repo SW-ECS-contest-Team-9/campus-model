@@ -1,6 +1,6 @@
 // 기기 안 길 맞춤(HMM, 고정 지연 Viterbi). 상태 = 길 위 점 / 보행 면 / 길 밖(바깥 열린 곳).
 // 층은 길 그래프로만 바뀐다(계단·승강기·경사로 길을 지나야 함). 기압은 층에 대한 부드러운 증거.
-import { buildGraph, edgesNear, footprintDist, inAnyFootprint, pointAt, pointInPoly, project, type Graph, type MapPackage } from './graph';
+import { buildGraph, edgesNear, footprintDist, inAnyFootprint, pointAt, pointInPoly, polyDist, project, type Graph, type MapPackage } from './graph';
 import { FeatureState } from './features';
 import type { TrustModel } from './trust';
 
@@ -62,6 +62,12 @@ export interface MatcherOptions {
   bareBuildings?: boolean; bareBuildingPrior?: number;
   /** GPS 높이를 절대 높이 증거로 쓰는 수직 정확도 상한(m). 0 이면 끔. 10-14 실측: 안드로이드(S21)는 실내에서도 vacc 1~2 m·층 높이와 1 m 안, iPhone 은 vacc 3~6 m 여도 20~35 m 틀려 끔. */
   gpsAltMaxVacc?: number;
+  /** 건물 키 → GPS sigma 배수. 벽이 두꺼워 GPS 가 유난히 틀리는 건물(북악관, 사용자 2026-10-22)의 외곽선 안·gpsDistrustM(m) 안에서 GPS 를 덜 믿는다. */
+  gpsDistrust?: Record<string, number> | null; gpsDistrustM?: number;
+  /** 절대 높이(GPS 높이·기압 영점)가 바깥(층 없는) 후보보다 이만큼(m) 넘게 낮으면 지하로 보고 그 후보를 뺀다(지하에서 GPS 가 지상처럼 찍힘, C02 10-15). 0 이면 끔. */
+  undergroundM?: number;
+  /** floorPrior 는 GPS 가 그 층 건물 외곽선에서 이 거리(m) 안일 때만 쓴다(0 = 안일 때만). 이동 중 다른 곳에서 그 층으로 끌리지 않게(10-14 평가). */
+  floorPriorMarginM?: number;
 }
 
 const enum K { Edge = 0, Area = 1, Off = 2, Bldg = 3 }
@@ -75,7 +81,7 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
   const o = {
     trust: null as TrustModel | null, strideM: 0.7, lagS: 5, maxCandidates: 60, sigmaMin: 5, sigmaMax: 50,
     radiusMin: 25, radiusMax: 120, offNetwork: true, emissionWeight: 0.3, platform: 'ios' as 'ios' | 'android', start: null as { x: number; y: number; z: number } | null,
-    anchor: true, anchorSigma: 1.0, anchorCap: 8, anchorMaxSigma: 10, anchorFootprintM: 8, anchorReject: 3, anchorAgree: 1.5, pdrVector: true, pdrVecSd: 2, offSustain: 10, switchPenalty: 0, trustGate: false, indoorPull: 1, floorPrior: null as Record<string, number> | null, userFloor: null as string | null, bareBuildings: true, bareBuildingPrior: -1, gpsAltMaxVacc: 0, ...options,
+    anchor: true, anchorSigma: 1.0, anchorCap: 8, anchorMaxSigma: 10, anchorFootprintM: 8, anchorReject: 3, anchorAgree: 1.5, pdrVector: true, pdrVecSd: 2, offSustain: 10, switchPenalty: 0, trustGate: false, indoorPull: 1, floorPrior: null as Record<string, number> | null, userFloor: null as string | null, bareBuildings: true, bareBuildingPrior: -1, gpsAltMaxVacc: 0, gpsDistrust: null as Record<string, number> | null, gpsDistrustM: 15, undergroundM: 4, floorPriorMarginM: 0, ...options,
   };
   const feats = new FeatureState(g, o.platform);
   const cols: Col[] = [];
@@ -165,7 +171,9 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
     return best;
   };
 
-  const candidates = (x: number, y: number, sigma: number, pseudo: boolean, zPred: number | null): Cand[] => {
+  // 지하: 절대 높이 zU 보다 undergroundM 넘게 높은 바깥(층 없는) 후보 = 지상 길
+  const aboveGround = (c: Cand, zU: number) => o.undergroundM > 0 && isFinite(zU) && isFinite(c.z) && c.z - zU > o.undergroundM && floorOf(c) === null;
+  const candidates = (x: number, y: number, sigma: number, pseudo: boolean, zPred: number | null, zU = NaN): Cand[] => {
     const r0 = pseudo ? Math.max(15, 3 * sigma) : Math.min(o.radiusMax, Math.max(o.radiusMin, 3 * sigma));
     const out: Cand[] = [];
     let nearest = Infinity;
@@ -187,7 +195,8 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
         nearest = Math.min(nearest, d);
         if (d > r) continue;
         const [px, py, pz] = pointAt(e, f);
-        out.push({ k: K.Edge, e: ei, f, x: px, y: py, z: pz, d });
+        const cand: Cand = { k: K.Edge, e: ei, f, x: px, y: py, z: pz, d };
+        if (!aboveGround(cand, zU)) out.push(cand);
       }
       if (pseudo) break;
     }
@@ -203,7 +212,8 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
     out.length = Math.min(out.length, o.maxCandidates);
     const zFree = zPred ?? (last ? last.z : NaN);
     g.areas.forEach((a, ai) => {
-      if (pointInPoly(x, y, a.poly)) out.push({ k: K.Area, e: ai, f: 0, x, y, z: a.z ?? zFree, d: 0 });
+      const cand: Cand = { k: K.Area, e: ai, f: 0, x, y, z: a.z ?? zFree, d: 0 };
+      if (pointInPoly(x, y, a.poly) && !aboveGround(cand, zU)) out.push(cand);
     });
     // 실내 길이 없는 건물: 관측이 외곽선 안이면 건물 자체를 상태로 둔다(높이는 기압으로 이어 감 → 층)
     if (o.bareBuildings) {
@@ -215,7 +225,7 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
     // 길 밖 상태는 GPS 가 아주 좋고 모든 길에서 멀리 떨어진 상태가 offSustain 번 이어졌을 때만(그 전엔 길로 끌어당긴다)
     if (!pseudo) offRun = sigma <= 8 && nearest > 25 && !inAnyFootprint(g, x, y) ? offRun + 1 : 0;
     const offOk = o.offNetwork && !pseudo && offRun >= o.offSustain;
-    if (offOk || out.length === 0) out.push({ k: K.Off, e: -1, f: 0, x, y, z: zFree, d: 0 });
+    if (offOk || out.length === 0) out.push({ k: K.Off, e: -1, f: 0, x, y, z: isFinite(zU) ? zU : zFree, d: 0 });
     return out;
   };
 
@@ -227,12 +237,16 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
     const prev = cols[cols.length - 1];
     const dB = baroNow - baroAtUpd;
     const zPred = last && baroSeen ? last.z + dB : null;
-    const c = !prev && o.start ? candidates(o.start.x, o.start.y, 10, true, o.start.z) : candidates(x, y, sigma, pseudo, zPred);
+    // 절대 높이: 믿을 만한 GPS 높이가 있으면 그것, 없으면 기압 + 영점
+    const gpsAbs = isFinite(gpsZ);
+    const zAbs = gpsAbs ? gpsZ : o.anchor && baroSeen && offN > 0 ? baroNow + off : NaN;
+    const zSd = gpsAbs ? Math.max(o.anchorSigma, gpsZSd) : o.anchorSigma;
+    const c = !prev && o.start ? candidates(o.start.x, o.start.y, 10, true, o.start.z) : candidates(x, y, sigma, pseudo, zPred, zAbs);
     if (!prev && o.start) for (const cc of c) cc.d = Math.hypot(cc.x - x, cc.y - y);
     if (prev && !pseudo) {
       // 직전 최선 상태를 걸음으로 민 예측점 근처 후보도 넣는다(길 위 위치가 GPS 투영에만 끌려가지 않게)
       const [px, py] = advance(prev.c[bestIdx(prev)]);
-      for (const cc of candidates(px, py, 5, true, zPred)) {
+      for (const cc of candidates(px, py, 5, true, zPred, zAbs)) {
         if (cc.k !== K.Edge) continue;
         cc.d = Math.hypot(cc.x - x, cc.y - y);
         c.push(cc);
@@ -243,10 +257,16 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
     const pdr = pdrSteps * o.strideM;
     const dt = prev ? t - prev.t : 0;
     let reset = !prev;
-    // 절대 높이: 믿을 만한 GPS 높이가 있으면 그것, 없으면 기압 + 영점
-    const gpsAbs = isFinite(gpsZ);
-    const zAbs = gpsAbs ? gpsZ : o.anchor && baroSeen && offN > 0 ? baroNow + off : NaN;
-    const zSd = gpsAbs ? Math.max(o.anchorSigma, gpsZSd) : o.anchorSigma;
+    // 층 사전 점수는 GPS 가 그 층 건물 외곽선 안(floorPriorMarginM)일 때만
+    const priorOk = new Map<string, boolean>();
+    const priorHere = (fk: string) => {
+      let v = priorOk.get(fk);
+      if (v === undefined) {
+        const bp = g.buildingPolys.find((b) => b.key === g.floorBuilding.get(fk));
+        priorOk.set(fk, (v = !!bp && polyDist(bp.poly, x, y) <= o.floorPriorMarginM));
+      }
+      return v;
+    };
     for (let j = 0; j < c.length; j++) {
       let em = (pseudo ? 1 : o.emissionWeight) * emission(c[j].d, sigma) + prior(c[j]);
       if (c[j].k !== K.Off && isFinite(zAbs) && isFinite(c[j].z)) em -= Math.min(o.anchorCap, (c[j].z - zAbs) ** 2 / (2 * zSd ** 2));
@@ -256,7 +276,7 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
         // 문 길(한쪽 끝이 바깥)은 건물 안이 아니므로 끌어당기지 않는다(10-14: iPhone 이 북악관 앞 본관 2F 문 길에 붙음)
         const door = c[j].k === K.Edge && g.nodes[g.edges[c[j].e].from].outdoor !== g.nodes[g.edges[c[j].e].to].outdoor;
         if (fk && o.indoorPull && !pseudo && !door) em += o.indoorPull * Math.max(0, Math.min(1, (sigma - 10) / 20));
-        if (fk && o.floorPrior && !(isFinite(zAbs))) em += o.floorPrior[fk] ?? 0;
+        if (fk && o.floorPrior && !isFinite(zAbs) && o.floorPrior[fk] && priorHere(fk)) em += o.floorPrior[fk];
       }
       if (!prev) {
         const st = o.start;
@@ -376,7 +396,13 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
     } else {
       const f = feats.fix(ev.t, ev.x, ev.y, ev.acc, ev.speed ?? -1, ev.course ?? -1);
       const raw = o.trust ? (o.trustGate ? Math.max(ev.acc, o.trust.sigma(f)) : o.trust.sigma(f)) : ev.acc;
-      const sigma = Math.max(o.sigmaMin, Math.min(o.sigmaMax, raw));
+      let scale = 1;
+      if (o.gpsDistrust)
+        for (const b of g.buildingPolys) {
+          const k = o.gpsDistrust[b.key];
+          if (k && k > scale && polyDist(b.poly, ev.x, ev.y) <= o.gpsDistrustM) scale = k;
+        }
+      const sigma = Math.max(o.sigmaMin, Math.min(o.sigmaMax, raw * scale));
       lastSigma = sigma;
       lastFixT = ev.t;
       const altOk = o.gpsAltMaxVacc > 0 && ev.alt !== undefined && ev.vacc !== undefined && ev.vacc > 0 && ev.vacc <= o.gpsAltMaxVacc;
