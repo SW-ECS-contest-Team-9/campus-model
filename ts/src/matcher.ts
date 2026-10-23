@@ -64,7 +64,7 @@ export interface MatcherOptions {
   gpsAltMaxVacc?: number;
   /** 건물 키 → GPS sigma 배수. 벽이 두꺼워 GPS 가 유난히 틀리는 건물(북악관, 사용자 2026-10-22)의 외곽선 안·gpsDistrustM(m) 안에서 GPS 를 덜 믿는다. */
   gpsDistrust?: Record<string, number> | null; gpsDistrustM?: number;
-  /** 절대 높이(GPS 높이·기압 영점)가 바깥(층 없는) 후보보다 이만큼(m) 넘게 낮으면 지하로 보고 그 후보를 뺀다(지하에서 GPS 가 지상처럼 찍힘, C02 10-15). 0 이면 끔. */
+  /** 절대 높이(믿을 만한 GPS 높이만, 기압 영점은 안 씀)가 바깥(층 없는) 후보보다 이만큼(m) 넘게 낮으면 지하로 보고 그 후보를 뺀다(지하에서 GPS 가 지상처럼 찍힘, C02 10-15). 0 이면 끔. */
   undergroundM?: number;
   /** floorPrior 는 GPS 가 그 층 건물 외곽선에서 이 거리(m) 안일 때만 쓴다(0 = 안일 때만). 이동 중 다른 곳에서 그 층으로 끌리지 않게(10-14 평가). */
   floorPriorMarginM?: number;
@@ -248,12 +248,14 @@ export function createMatcher(pkgOrGraph: MapPackage | Graph, options: MatcherOp
     const gpsAbs = isFinite(gpsZ);
     const zAbs = gpsAbs ? gpsZ : o.anchor && baroSeen && offN > 0 ? baroNow + off : NaN;
     const zSd = gpsAbs ? Math.max(o.anchorSigma, gpsZSd) : o.anchorSigma;
-    const c = !prev && o.start ? candidates(o.start.x, o.start.y, 10, true, o.start.z) : candidates(x, y, sigma, pseudo, zPred, zAbs);
+    // 지하 판정은 믿을 만한 GPS 높이로만(기압 영점은 어긋나 지상 길을 잘못 뺌: 합성 iOS 층 0.426 → 0.402, 2026-10-23)
+    const zU = gpsAbs ? zAbs : NaN;
+    const c = !prev && o.start ? candidates(o.start.x, o.start.y, 10, true, o.start.z) : candidates(x, y, sigma, pseudo, zPred, zU);
     if (!prev && o.start) for (const cc of c) cc.d = Math.hypot(cc.x - x, cc.y - y);
     if (prev && !pseudo) {
       // 직전 최선 상태를 걸음으로 민 예측점 근처 후보도 넣는다(길 위 위치가 GPS 투영에만 끌려가지 않게)
       const [px, py] = advance(prev.c[bestIdx(prev)]);
-      for (const cc of candidates(px, py, 5, true, zPred, zAbs)) {
+      for (const cc of candidates(px, py, 5, true, zPred, zU)) {
         if (cc.k !== K.Edge) continue;
         cc.d = Math.hypot(cc.x - x, cc.y - y);
         c.push(cc);
