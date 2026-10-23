@@ -95,15 +95,15 @@
    "on_network": 1
   },
   "v2 default + floorPrior(6F)": {
-   "in_building": 0.997,
-   "on_6F": 0.997,
+   "in_building": 0.993,
+   "on_6F": 0.978,
    "on_network": 1
   }
  },
  "latency": {
   "method": "v2 HMM+trust_v2",
-  "median_ms": 0.185,
-  "p99_ms": 2.295,
+  "median_ms": 0.195,
+  "p99_ms": 2.384,
   "n": 60829
  }
 }
