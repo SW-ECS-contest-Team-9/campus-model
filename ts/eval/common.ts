@@ -8,7 +8,8 @@ export interface Est { t: number; x: number; y: number; z: number | null; edge?:
 export interface Route { id: number; platform: 'ios' | 'android'; events: SensorEvent[]; truth: Truth[] }
 
 export const root = new URL('../../', import.meta.url);
-export const pkg = JSON.parse(readFileSync(new URL('data/package.json', root), 'utf8'));
+// CAMPUS_PKG=<꾸러미 경로> 로 다른 공개본(예: 백엔드 skuniv-v13, 걷는 면 있음)을 쓴다. 합성 시험셋은 data/package.json(v1) 기준이라 거기엔 쓰지 않는다.
+export const pkg = JSON.parse(readFileSync(process.env.CAMPUS_PKG ?? new URL('data/package.json', root), 'utf8'));
 export const g = buildGraph(pkg);
 export const loadRoutes = (): Route[] => JSON.parse(readFileSync(new URL('data/synth/test.json', root), 'utf8')).routes;
 

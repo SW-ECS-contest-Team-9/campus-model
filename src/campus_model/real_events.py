@@ -16,6 +16,8 @@ from pathlib import Path
 
 from .geo import lonlat_to_5186
 
+GEOID_N = 23.377
+
 
 def _ts(s):
     return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
@@ -30,6 +32,10 @@ def to_events(locations, fused=None, stride=0.7):
         ev.append({"type": "fix", "t": round(_ts(f["timestamp"]) - t0, 3), "x": x, "y": y,
                    "acc": f.get("horizontalAccuracy") or 30, "speed": f.get("speed", -1) if f.get("speed") is not None else -1,
                    "course": f.get("course", -1) if f.get("course") is not None else -1})
+        if f.get("ellipsoidalAltitude") is not None and f.get("verticalAccuracy") is not None and f["verticalAccuracy"] > 0:
+            # 지도 z 는 정표고. 캠퍼스 지오이드고(KNGeoid18) 23.377 m (campus-tracker geo/campus-frame.ts)
+            ev[-1]["alt"] = round(f["ellipsoidalAltitude"] - GEOID_N, 2)
+            ev[-1]["vacc"] = f["verticalAccuracy"]
     if fused:
         fused = sorted(fused, key=lambda f: f["timestamp"])
         acc_d, prev = 0.0, None
