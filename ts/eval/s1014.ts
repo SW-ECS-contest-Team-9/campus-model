@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { createMatcher, type MatcherOptions, type SensorEvent } from '../src/matcher';
 import { pointInPoly } from '../src/graph';
 import { loadTrustModel } from '../src/trust';
+import { DEFAULT_GPS_DISTRUST } from '../src/index';
 import { g, pkg, q, root } from './common';
 
 const BLD = 'f:북악관:', TARGET = 'f:북악관:6F';
@@ -33,13 +34,20 @@ function distFp(x: number, y: number) {
   return best;
 }
 
-// v2(10-15 기본) / 지금 기본값(createDefaultMatcher 와 같음) / 앱이 층을 알려 줄 때. noBaro = 기압 대용 사건을 뺌.
-const def = (p: 'ios' | 'android'): MatcherOptions => ({ platform: p, trust: p === 'android' ? trustV2 : null, gpsAltMaxVacc: p === 'android' ? 3 : 0 });
+// v2(10-15) / 10-22 기본 / 지금 기본값(createDefaultMatcher 와 같음) / 앱이 층을 알려 줄 때. noBaro = 기압 대용 사건을 뺌.
+const BUKAK = 'b:북악관';
+const def22 = (p: 'ios' | 'android'): MatcherOptions => ({ platform: p, trust: p === 'android' ? trustV2 : null, gpsAltMaxVacc: p === 'android' ? 3 : 0, undergroundM: 0, floorPriorMarginM: Infinity });
+// 북악관 sigma 배수 훑기: S1014_SCALES=1,1.5,2,3 (2026-10-23: 1.5·2·3 이 비슷, 2 를 기본으로)
+const scales = (process.env.S1014_SCALES ?? String(DEFAULT_GPS_DISTRUST[BUKAK])).split(',').map(Number);
+const def = (p: 'ios' | 'android', k = DEFAULT_GPS_DISTRUST[BUKAK]): MatcherOptions => ({ platform: p, trust: p === 'android' ? trustV2 : null, gpsAltMaxVacc: p === 'android' ? 3 : 0, gpsDistrust: { [BUKAK]: k } });
 const methods: [string, (p: 'ios' | 'android') => MatcherOptions, boolean?][] = [
-  ['v2 (10-15)', (p) => ({ ...def(p), gpsAltMaxVacc: 0 })],
-  ['default', def],
-  ['default, no baro proxy', def, true],
-  ['default + floorPrior(6F)', (p) => ({ ...def(p), floorPrior: { [TARGET]: 1 } })],
+  ['v2 (10-15)', (p) => ({ ...def22(p), gpsAltMaxVacc: 0 })],
+  ['10-22 default', def22],
+  ['10-22 + floorPrior(6F, anywhere)', (p) => ({ ...def22(p), floorPrior: { [TARGET]: 1 } })],
+  ...scales.map((k): [string, (p: 'ios' | 'android') => MatcherOptions] => [`default (Bukak sigma x${k})`, (p) => def(p, k)]),
+  ['default, no baro proxy', (p) => def(p), true],
+  ['default + floorPrior(6F, inside footprint)', (p) => ({ ...def(p), floorPrior: { [TARGET]: 1 } })],
+  ['default + floorPrior(6F, within 15 m)', (p) => ({ ...def(p), floorPrior: { [TARGET]: 1 }, floorPriorMarginM: 15 })],
 ];
 
 interface Per { file: string; platform: string; label: string; uncertain: boolean; n: number; inB: number; on6: number; flips: number; flipsPerMin: number; dRaw: number; dMatch: number }
